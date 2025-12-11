@@ -9,75 +9,117 @@
 <style>
   body {
     font-family: 'Noto Sans TC', sans-serif;
-    background: linear-gradient(to bottom, #fffaf7, #fff5f0);
+    background: linear-gradient(to bottom, #fffaf7, #fff3ed);
     margin: 0;
     padding: 0;
     display: flex;
     justify-content: center;
     align-items: center;
     height: 100vh;
+    animation: fadeInBg 1.6s ease forwards;
+  }
+
+  @keyframes fadeInBg {
+    0% { opacity: 0; }
+    100% { opacity: 1; }
   }
 
   .container {
     background: #ffffff;
-    padding: 32px 26px;
-    border-radius: 18px;
-    box-shadow: 0 8px 22px rgba(0,0,0,0.12);
+    padding: 36px 30px;
+    border-radius: 22px;
     max-width: 420px;
     width: 92%;
     text-align: center;
-    animation: fadeIn 0.4s ease;
+
+    /* ✨ 更高級的柔光陰影 */
+    box-shadow: 0 14px 28px rgba(0,0,0,0.08),
+                0 2px 4px rgba(0,0,0,0.05);
+
+    /* ✨ 高級卡片微描邊 */
+    border: 1px solid rgba(0,0,0,0.04);
+
+    animation: popCard 0.5s ease;
   }
 
-  @keyframes fadeIn {
-    0% { opacity: 0; transform: scale(0.97); }
+  @keyframes popCard {
+    0% { opacity: 0; transform: scale(0.96); }
     100% { opacity: 1; transform: scale(1); }
+  }
+
+  .emoji {
+    font-size: 38px;
+    margin-bottom: 12px;
+    animation: breathe 2.2s ease-in-out infinite;
+  }
+
+  @keyframes breathe {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.07); }
   }
 
   h2 {
     color: #dd5434;
-    font-size: 26px;
-    margin-bottom: 10px;
+    font-size: 28px;
+    margin-bottom: 12px;
     font-weight: 700;
-  }
+    letter-spacing: 1px;
 
-  .emoji {
-    font-size: 32px;
-    margin-bottom: 10px;
+    /* ✨ 柔光效果 */
+    text-shadow: 0 1px 4px rgba(221, 84, 52, 0.20);
   }
 
   p {
     color: #666;
-    font-size: 16px;
-    line-height: 1.55;
-    margin-bottom: 22px;
+    font-size: 17px;
+    line-height: 1.67;
+    margin-bottom: 26px;
   }
 
   .main-btn {
     width: 100%;
-    padding: 15px 0;
-    font-size: 18px;
-    background: linear-gradient(135deg, #ff7b5a, #dd5434);
+    padding: 16px 0;
+    font-size: 19px;
+    background: linear-gradient(135deg, #ff8a68, #dd5434);
     color: white;
     border: none;
     border-radius: 50px;
     cursor: pointer;
     font-weight: 700;
-    box-shadow: 0 6px 15px rgba(221, 84, 52, 0.35);
+
+    /* ✨ 精緻浮起陰影 */
+    box-shadow: 0 6px 18px rgba(221, 84, 52, 0.32);
     transition: 0.25s ease;
-    transform: translateY(0);
+    position: relative;
+    overflow: hidden;
+  }
+
+  /* ✨ 按鈕光澤滑過效果 */
+  .main-btn::before {
+    content: "";
+    position: absolute;
+    top: 0; left: -60%;
+    width: 50%;
+    height: 100%;
+    background: linear-gradient(120deg, rgba(255,255,255,0.0), rgba(255,255,255,0.4), rgba(255,255,255,0.0));
+    transform: skewX(-20deg);
+    transition: 0.4s;
+  }
+
+  .main-btn:hover::before {
+    left: 110%;
   }
 
   .main-btn:hover {
-    background: linear-gradient(135deg, #ff8f71, #e65a3a);
-    box-shadow: 0 10px 22px rgba(221, 84, 52, 0.45);
-    transform: translateY(-3px) scale(1.02);
+    transform: translateY(-3px) scale(1.03);
+    box-shadow: 0 12px 26px rgba(221, 84, 52, 0.42);
   }
 
   .main-btn:active {
     transform: translateY(1px) scale(0.98);
-    box-shadow: 0 4px 12px rgba(221, 84, 52, 0.30);
+    box-shadow: 0 4px 14px rgba(221, 84, 52, 0.28);
   }
+
 </style>
 </head>
 
