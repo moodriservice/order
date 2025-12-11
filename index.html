@@ -54,21 +54,32 @@
   }
 
   .main-btn {
-    width: 100%;
-    padding: 14px 0;
-    font-size: 18px;
-    background: #dd5434;
-    color: white;
-    border: none;
-    border-radius: 50px;
-    cursor: pointer;
-    font-weight: 600;
-    transition: 0.25s;
-  }
+  width: 100%;
+  padding: 15px 0;
+  font-size: 18px;
+  background: linear-gradient(135deg, #ff7b5a, #dd5434);
+  color: white;
+  border: none;
+  border-radius: 50px;
+  cursor: pointer;
+  font-weight: 700;
 
-  .main-btn:hover {
-    background: #c33f20;
-  }
+  /* 立體＋浮起 */
+  box-shadow: 0 6px 15px rgba(221, 84, 52, 0.35);
+  transition: 0.25s ease;
+  transform: translateY(0);
+}
+
+.main-btn:hover {
+  background: linear-gradient(135deg, #ff8f71, #e65a3a);
+  box-shadow: 0 10px 22px rgba(221, 84, 52, 0.45);
+  transform: translateY(-3px) scale(1.02);
+}
+
+.main-btn:active {
+  transform: translateY(1px) scale(0.98);
+  box-shadow: 0 4px 12px rgba(221, 84, 52, 0.30);
+}
 
   /* IG 偵測提示 */
   .ig-alert {
@@ -115,7 +126,7 @@
       <span class="dots-icon">⋯</span>
       你似乎正在使用 IG/FB 內建瀏覽器開啟 👀<br>
       若按鈕無法開啟，請點右上角「⋯」<br>
-      → 選擇「在瀏覽器中開啟」<br>
+      → 選擇「使用外部瀏覽器中開啟」<br>
       即可正常使用瀏覽頁面 💡
     </div>
 
