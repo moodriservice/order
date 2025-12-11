@@ -65,7 +65,27 @@
     margin-bottom: 26px;
   }
 
-  /* Main button */
+  /* Loading 區塊 */
+  #loadingBox {
+    display: none;
+    text-align: center;
+  }
+
+  .spinner {
+    margin: 22px auto;
+    width: 34px;
+    height: 34px;
+    border: 4px solid #ffd6cc;
+    border-top-color: #dd5434;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+
+  @keyframes spin {
+    100% { transform: rotate(360deg); }
+  }
+
+  /* 按鈕（外部瀏覽器 fallback 用） */
   .main-btn {
     width: 100%;
     padding: 16px 0;
@@ -76,7 +96,6 @@
     border-radius: 50px;
     cursor: pointer;
     font-weight: 700;
-
     box-shadow: 0 6px 18px rgba(221, 84, 52, 0.32);
     transition: 0.25s ease;
     position: relative;
@@ -108,50 +127,45 @@
     box-shadow: 0 4px 14px rgba(221, 84, 52, 0.28);
   }
 
-  /* Loading 區塊（自動跳轉時才會用到） */
-  #loadingBox {
+  /* IG/FB 專用說明文字區 */
+  #igGuide {
     display: none;
-    text-align: center;
+    background: #fff4ef;
+    padding: 18px 18px;
+    border-radius: 14px;
+    border-left: 4px solid #dd5434;
+    font-size: 16px;
+    line-height: 1.65;
+    text-align: left;
   }
-
-  .spinner {
-    margin: 22px auto;
-    width: 34px;
-    height: 34px;
-    border: 4px solid #ffd6cc;
-    border-top-color: #dd5434;
-    border-radius: 50%;
-    animation: spin 0.8s linear infinite;
-  }
-
-  @keyframes spin {
-    100% { transform: rotate(360deg); }
-  }
-
 </style>
 </head>
 
 <body>
-  <div class="container" id="mainBox">
+  <div class="container">
 
     <div class="emoji">🛒</div>
 
-    <h2 id="mainTitle">暮日甜點訂購單</h2>
+    <h2 id="title">暮日甜點訂購單</h2>
 
-    <p id="mainText">
-      IG 可能導致網頁無法開啟，<br>
-      建議使用外部瀏覽器開啟訂購頁面 🌟
+    <p id="introText">
+      若您使用 IG 或 FB 開啟本頁，<br>
+      可能無法直接前往訂購頁。
     </p>
 
-    <a href="https://script.google.com/macros/s/AKfycbxPQnvVDuDRw_OqhGBYzw3Xk3-AAW_JnpoqJ3FdmOF8cx6-GU8yazGKRs9iH2DDKt7Smw/exec" target="_blank">
-      <button class="main-btn" id="manualBtn">立即前往 ➜</button>
-    </a>
+    <!-- IG/FB 專用純文字教學 -->
+    <div id="igGuide">
+      📌 要前往訂購頁面請按照以下步驟：<br><br>
+      1️⃣ 請點右上角「⋯」<br>
+      2️⃣ 選擇「使用外部瀏覽器開啟」<br>
+      3️⃣ 將會自動開啟訂購單頁面
+    </div>
 
-    <!-- Loading 模式 -->
+    <!-- Loading 狀態（外部瀏覽器使用） -->
     <div id="loadingBox">
       <h2>正在前往訂購頁面…</h2>
       <div class="spinner"></div>
-      <p>若 5 秒內無自動跳轉，請點擊下方按鈕</p>
+      <p id="loadMsg">若 5 秒內未成功跳轉，請點擊下方按鈕</p>
 
       <a href="https://script.google.com/macros/s/AKfycbxPQnvVDuDRw_OqhGBYzw3Xk3-AAW_JnpoqJ3FdmOF8cx6-GU8yazGKRs9iH2DDKt7Smw/exec">
         <button class="main-btn">前往訂購頁</button>
@@ -164,17 +178,21 @@
   const ua = navigator.userAgent.toLowerCase();
   const isIG = ua.includes("instagram");
   const isFB = ua.includes("fb_iab") || ua.includes("fbav");
-
-  const mainBox = document.getElementById("mainBox");
-  const loadingBox = document.getElementById("loadingBox");
   const targetURL = "https://script.google.com/macros/s/AKfycbxPQnvVDuDRw_OqhGBYzw3Xk3-AAW_JnpoqJ3FdmOF8cx6-GU8yazGKRs9iH2DDKt7Smw/exec";
 
-  // 若不是 IG/FB WebView → 啟動自動跳轉
-  if (!isIG && !isFB) {
-    // 換成 loading 介面
-    document.getElementById("manualBtn").style.display = "none";
-    document.getElementById("mainTitle").textContent = "";
-    document.getElementById("mainText").textContent = "";
+  const igGuide = document.getElementById("igGuide");
+  const loadingBox = document.getElementById("loadingBox");
+  const introText = document.getElementById("introText");
+
+  // IG/FB 內建瀏覽器 → 顯示教學，不跳轉
+  if (isIG || isFB) {
+    igGuide.style.display = "block";
+  } 
+  
+  // 外部瀏覽器 → 自動跳轉 + loading
+  else {
+    introText.style.display = "none";
+    igGuide.style.display = "none";
     loadingBox.style.display = "block";
 
     // 自動跳轉
@@ -182,9 +200,10 @@
       window.location.href = targetURL;
     }, 500);
 
-    // 5 秒後若跳轉失敗 → 顯示備用按鈕（已內建在 loadingBox）
+    // Fallback 訊息
     setTimeout(() => {
-      loadingBox.querySelector("p").textContent = "看起來自動跳轉可能被阻擋了，請點擊下方按鈕";
+      document.getElementById("loadMsg").textContent =
+        "看起來自動跳轉可能被阻擋了，請點擊下方按鈕";
     }, 5000);
   }
 </script>
