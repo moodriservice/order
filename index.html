@@ -20,7 +20,7 @@
 
   .container {
     background: #ffffff;
-    padding: 30px 26px;
+    padding: 32px 26px;
     border-radius: 18px;
     box-shadow: 0 8px 22px rgba(0,0,0,0.12);
     max-width: 420px;
@@ -36,19 +36,23 @@
 
   h2 {
     color: #dd5434;
-    font-size: 24px;
+    font-size: 26px;
     margin-bottom: 10px;
     font-weight: 700;
+  }
+
+  .emoji {
+    font-size: 32px;
+    margin-bottom: 10px;
   }
 
   p {
     color: #666;
     font-size: 16px;
-    line-height: 1.5;
-    margin-bottom: 20px;
+    line-height: 1.55;
+    margin-bottom: 22px;
   }
 
-  /* 按鈕 */
   .main-btn {
     width: 100%;
     padding: 14px 0;
@@ -66,13 +70,14 @@
     background: #c33f20;
   }
 
-  /* IG 手動提示框 */
-  .hint-box {
-    background: #fff7f3;
+  /* IG 偵測提示 */
+  .ig-alert {
+    display: none;
+    background: #fff2ec;
     border-left: 4px solid #dd5434;
     padding: 14px 15px;
     border-radius: 10px;
-    margin-top: 20px;
+    margin-top: 22px;
     text-align: left;
     font-size: 14px;
     color: #444;
@@ -91,25 +96,40 @@
 
 <body>
   <div class="container">
+
+    <div class="emoji">🛒✨</div>
+
     <h2>前往線上訂購</h2>
 
     <p>
       建議使用外部瀏覽器開啟訂購頁面，<br>
-      以確保完整功能和最佳體驗。
+      以確保完整功能與最佳使用體驗 🌟
     </p>
 
-    <!-- 主要前往按鈕 -->
     <a href="https://script.google.com/macros/s/AKfycbxPQnvVDuDRw_OqhGBYzw3Xk3-AAW_JnpoqJ3FdmOF8cx6-GU8yazGKRs9iH2DDKt7Smw/exec" target="_blank">
-      <button class="main-btn">我知道了</button>
+      <button class="main-btn">立即前往 ➜</button>
     </a>
 
-    <!-- IG 專用手動提示 -->
-    <div class="hint-box">
+    <!-- Instagram WebView 偵測提示 -->
+    <div class="ig-alert" id="igAlert">
       <span class="dots-icon">⋯</span>
+      你似乎正在使用 Instagram 內建瀏覽器開啟 👀<br>
       若按鈕無法開啟，請點右上角「⋯」<br>
       → 選擇「在瀏覽器中開啟」<br>
-      → 再次點擊按鈕即可正常使用
+      即可正常使用外部瀏覽器 💡
     </div>
+
   </div>
+
+<script>
+  // 偵測 Instagram / Facebook 內建瀏覽器
+  const ua = navigator.userAgent.toLowerCase();
+  const igAlert = document.getElementById("igAlert");
+
+  if (ua.includes("instagram") || ua.includes("fb_iab") || ua.includes("fbav")) {
+    igAlert.style.display = "block";
+  }
+</script>
+
 </body>
 </html>
