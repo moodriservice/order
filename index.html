@@ -3,103 +3,82 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>線上訂購提示</title>
+<title>前往線上訂購</title>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@300;400;500;700&display=swap" rel="stylesheet">
 
 <style>
-  /* 全域背景 */
   body {
     font-family: 'Noto Sans TC', sans-serif;
+    background: linear-gradient(to bottom, #fffaf7, #fff5f0);
     margin: 0;
     padding: 0;
+    display: flex;
+    justify-content: center;
+    align-items: center;
     height: 100vh;
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    background: linear-gradient(to bottom, #fffaf7, #fff5f0);
-    overflow: hidden;
   }
 
-  /* 半透明浮層 */
-  .overlay {
-    position: fixed;
-    inset: 0;
-    background: rgba(0,0,0,0.4);
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    padding: 20px;
-  }
-
-  /* 內容區塊 */
   .container {
     background: #ffffff;
-    padding: 30px 25px;
-    border-radius: 16px;
-    box-shadow: 0 8px 20px rgba(0,0,0,0.15);
+    padding: 32px 25px;
+    border-radius: 18px;
+    box-shadow: 0 8px 22px rgba(0,0,0,0.12);
+    max-width: 420px;
+    width: 90%;
     text-align: center;
-    max-width: 400px;
-    width: 100%;
-    animation: popIn 0.3s ease;
+    animation: fadeIn 0.4s ease;
   }
 
-  @keyframes popIn {
-    0% { transform: scale(0.8); opacity: 0; }
-    100% { transform: scale(1); opacity: 1; }
+  @keyframes fadeIn {
+    0% { opacity: 0; transform: scale(0.97); }
+    100% { opacity: 1; transform: scale(1); }
   }
 
   h2 {
-    font-size: 24px;
-    margin-bottom: 15px;
     color: #dd5434;
+    font-size: 26px;
+    margin-bottom: 16px;
+    font-weight: 700;
   }
 
   p {
-    font-size: 16px;
     color: #666;
-    margin-bottom: 25px;
+    font-size: 16px;
     line-height: 1.5;
+    margin-bottom: 26px;
   }
 
-  /* 按鈕樣式 */
   a button {
+    width: 100%;
+    padding: 14px 0;
     font-size: 18px;
-    padding: 14px 30px;
+    background: #dd5434;
+    color: white;
     border: none;
     border-radius: 50px;
-    background: #dd5434;
-    color: #fff;
-    font-weight: 500;
     cursor: pointer;
+    font-weight: 600;
     transition: 0.3s;
-    width: 100%;
   }
 
   a button:hover {
     background: #c33f20;
   }
-
-  @media (max-width: 360px){
-    h2 { font-size: 20px; }
-    p { font-size: 14px; }
-    a button { font-size: 16px; padding: 12px 25px; }
-  }
 </style>
-
 </head>
-<body>
-  <div class="overlay">
-    <div class="container">
-      <h2>前往線上訂購頁面</h2>
-      <p>建議使用外部瀏覽器開啟訂購頁面，<br>以確保完整功能和最佳體驗。</p>
 
-      <!-- 🟢 IG 兼容按鈕（方案1） -->
-      <a href="https://script.google.com/macros/s/AKfycbxPQnvVDuDRw_OqhGBYzw3Xk3-AAW_JnpoqJ3FdmOF8cx6-GU8yazGKRs9iH2DDKt7Smw/exec"
-         target="_blank"
-         rel="noopener noreferrer">
-        <button>我知道了</button>
-      </a>
-    </div>
+<body>
+  <div class="container">
+    <h2>前往線上訂購</h2>
+    <p>
+      建議使用外部瀏覽器開啟訂購頁面，<br>
+      以確保完整功能和最佳體驗。
+    </p>
+
+    <!-- 🔥 中繼跳轉：先開 GitHub Page → 再跳 Apps Script -->
+    <a href="https://script.google.com/macros/s/AKfycbxPQnvVDuDRw_OqhGBYzw3Xk3-AAW_JnpoqJ3FdmOF8cx6-GU8yazGKRs9iH2DDKt7Smw/exec" target="_blank">
+      <button>我知道了</button>
+    </a>
   </div>
 </body>
 </html>
