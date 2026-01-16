@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>前往線上訂購</title>
+<title>暮日 MOODRI 甜點訂購單</title>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@300;400;500;700&display=swap" rel="stylesheet">
 
 <style>
@@ -44,9 +44,12 @@
     100% { opacity: 1; transform: scale(1); }
   }
 
-  .emoji {
-    font-size: 38px;
-    margin-bottom: 12px;
+  /* ✨ 新增：圖片樣式 */
+  .hero-img {
+    width: 140px;       /* 圖片寬度，可自行調整 */
+    height: auto;       /* 自動計算高度，維持比例 */
+    margin-bottom: 10px; /* 與下方標題的距離 */
+    border-radius: 12px; /* 圓角矩形風格 (適合甜點照) */
   }
 
   h2 {
@@ -144,7 +147,7 @@
 <body>
   <div class="container">
 
-    <div class="emoji">🛒</div>
+    <img src="https://drive.google.com/uc?export=view&id=1YtUQmxEPpyhuGai3jyc6yhjgW_E32sJ1" alt="暮日甜點" class="hero-img">
 
     <h2 id="title">暮日甜點訂購單</h2>
 
@@ -153,7 +156,6 @@
       可能無法直接前往訂購頁。
     </p>
 
-    <!-- IG/FB 專用純文字教學 -->
     <div id="igGuide">
       📌 要前往訂購頁面請按照以下步驟：<br><br>
       1️⃣ 請點右上角「⋯」<br>
@@ -161,7 +163,6 @@
       3️⃣ 將會自動開啟訂購單頁面
     </div>
 
-    <!-- Loading 狀態（外部瀏覽器使用） -->
     <div id="loadingBox">
       <h2>正在前往訂購頁面…</h2>
       <div class="spinner"></div>
