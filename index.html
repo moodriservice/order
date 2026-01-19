@@ -56,7 +56,7 @@
     height: auto;         /* 高度自動，維持原圖比例，不會變形 */
     margin-bottom: 10px;  /* 與下方標題的距離 */
     display: inline-block;
-    
+     
     /* 移除圓角和陰影，讓去背圖完美融合 */
     border-radius: 0; 
     box-shadow: none; 
@@ -190,7 +190,9 @@
   const ua = navigator.userAgent.toLowerCase();
   const isIG = ua.includes("instagram");
   const isFB = ua.includes("fb_iab") || ua.includes("fbav");
-  const targetURL = "https://script.google.com/macros/s/AKfycbxPQnvVDuDRw_OqhGBYzw3Xk3-AAW_JnpoqJ3FdmOF8cx6-GU8yazGKRs9iH2DDKt7Smw/exec";
+  
+  // 這裡的連結已更新
+  const targetURL = "https://script.google.com/macros/s/AKfycbzXqyTeQ2m5qzYRGqd0HBgQUYaPbORnri2p6Y2jCBOp8yImyAKbYh6BnmU2PqtGsdu3zQ/exec";
 
   const igGuide = document.getElementById("igGuide");
   const loadingBox = document.getElementById("loadingBox");
@@ -200,7 +202,7 @@
   if (isIG || isFB) {
     igGuide.style.display = "block";
   } 
-  
+   
   // 外部瀏覽器 → 自動跳轉 + loading
   else {
     introText.style.display = "none";
