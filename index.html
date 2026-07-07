@@ -21,7 +21,7 @@
     display: flex;
     justify-content: center;
     align-items: center;
-    height: 100vh;
+    min-height: 100vh;
     animation: fadeInBg 1.6s ease forwards;
   }
 
@@ -163,23 +163,27 @@
     <h2 id="title">暮日甜點訂購單</h2>
 
     <p id="introText" style="display:none">
-      若您使用 IG 或 FB 開啟本頁，<br>
+      若您使用 IG、FB 或 LINE 開啟本頁，<br>
       可能無法直接前往訂購頁。
     </p>
 
     <div id="igGuide">
       📌 要前往訂購頁面請按照以下步驟：<br><br>
-      1️⃣ 請點右上角「⋯」<br>
+      1️⃣ 請點右上或右下的「⋯」或「⋮」<br>
       2️⃣ 選擇「使用外部瀏覽器開啟」<br>
       3️⃣ 將會自動開啟訂購單頁面
     </div>
+
+    <a id="manualLink" href="#" style="display:none; text-decoration:none;">
+      <button class="main-btn" style="margin-top:18px;">前往訂購頁</button>
+    </a>
 
     <div id="loadingBox">
       <h2>正在前往訂購頁面…</h2>
       <div class="spinner"></div>
       <p id="loadMsg">若 5 秒內未成功跳轉，請點擊下方按鈕</p>
 
-      <a href="https://script.google.com/macros/s/AKfycbzXqyTeQ2m5qzYRGqd0HBgQUYaPbORnri2p6Y2jCBOp8yImyAKbYh6BnmU2PqtGsdu3zQ/exec">
+      <a id="loadingLink" href="#">
         <button class="main-btn">前往訂購頁</button>
       </a>
     </div>
@@ -190,20 +194,29 @@
   const ua = navigator.userAgent.toLowerCase();
   const isIG = ua.includes("instagram");
   const isFB = ua.includes("fb_iab") || ua.includes("fbav");
-  
-  // 這裡的連結已更新
+  const isLine = ua.includes("line/");
+  const isThreads = ua.includes("barcelona");
+  // 社群內建瀏覽器（IG/FB/LINE/Threads）常擋 Google/GAS，統一走「顯示教學、不自動跳轉」
+  const isInApp = isIG || isFB || isLine || isThreads;
+
   const targetURL = "https://script.google.com/macros/s/AKfycbzXqyTeQ2m5qzYRGqd0HBgQUYaPbORnri2p6Y2jCBOp8yImyAKbYh6BnmU2PqtGsdu3zQ/exec";
 
   const igGuide = document.getElementById("igGuide");
   const loadingBox = document.getElementById("loadingBox");
   const introText = document.getElementById("introText");
+  const manualLink = document.getElementById("manualLink");
+  const loadingLink = document.getElementById("loadingLink");
 
-  // IG/FB 內建瀏覽器 → 顯示教學，不跳轉
-  if (isIG || isFB) {
+  // GAS 網址統一由 JS 填入兩顆按鈕（改部署只需改上面 targetURL 一處）
+  manualLink.href = targetURL;
+  loadingLink.href = targetURL;
+
+  // 社群內建瀏覽器 → 顯示教學 + 手動按鈕，不自動跳轉
+  if (isInApp) {
     introText.style.display = "block";
     igGuide.style.display = "block";
-  } 
-   
+    manualLink.style.display = "block";
+  }
   // 外部瀏覽器 → 自動跳轉 + loading
   else {
     introText.style.display = "none";
