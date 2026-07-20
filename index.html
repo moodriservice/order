@@ -56,10 +56,17 @@
     height: auto;         /* 高度自動，維持原圖比例，不會變形 */
     margin-bottom: 10px;  /* 與下方標題的距離 */
     display: inline-block;
-     
+
     /* 移除圓角和陰影，讓去背圖完美融合 */
-    border-radius: 0; 
-    box-shadow: none; 
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  /* 防止手機長按跳出「儲存圖片」選單、電腦拖曳存圖（僅心理防線，非真正資安機制） */
+  img {
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
   }
 
   h2 {
@@ -210,6 +217,14 @@
   // GAS 網址統一由 JS 填入兩顆按鈕（改部署只需改上面 targetURL 一處）
   manualLink.href = targetURL;
   loadingLink.href = targetURL;
+
+  // 防右鍵存圖、防拖曳存圖（僅心理防線，開發者工具或抓封包還是看得到圖片網址）
+  document.addEventListener('contextmenu', function(e) {
+    if (e.target.tagName === 'IMG') e.preventDefault();
+  });
+  document.addEventListener('dragstart', function(e) {
+    if (e.target.tagName === 'IMG') e.preventDefault();
+  });
 
   // 社群內建瀏覽器 → 顯示教學 + 手動按鈕，不自動跳轉
   if (isInApp) {
