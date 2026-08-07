@@ -141,6 +141,12 @@ button:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
 .tm-main:active{transform:translateY(3px);box-shadow:0 1px 0 var(--brand-dark)}
 .tm-main.finish{background:var(--ok);box-shadow:0 4px 0 #1b5e20}
 .tm-main.finish:active{box-shadow:0 1px 0 #1b5e20}
+/* 暫停中：主按鈕轉灰，一眼看出這張沒在算時間 */
+.tm-main.paused{background:#8a7a73;box-shadow:0 4px 0 #6b5c56}
+.tm-main.paused:active{box-shadow:0 1px 0 #6b5c56}
+
+.tm-card.is-paused{background:#f7f4f2;border-style:dashed}
+.tm-status.paused{color:#6b5c56;font-weight:700}
 
 .tm-foot{grid-column:1 / -1;margin-top:6px;display:flex;align-items:center;gap:10px}
 .tm-undo{
@@ -322,15 +328,27 @@ button:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
 //（理由見規格「安全條款」節）。硬性禁令：不得沿用於訂單、客戶或金額資料。
 var DEFAULT_ENDPOINT = 'https://script.google.com/macros/s/AKfycbzeRMMaHqHoCngMgKJBt0tYHf-cui_1PYWxne8MeFbBngOfM3Wn36y-lVj8tGIzSdpL/exec';
 
-var LIMITS = { batch: 50, itemsBatch: 300, query: 200, maxQty: 5000, maxOrderCount: 5000, maxBoxCount: 20000, text: 200 };
+var LIMITS = {
+  batch: 50, itemsBatch: 300, channelsBatch: 30, query: 200,
+  maxQty: 5000, maxOrderCount: 5000, maxBoxCount: 20000,
+  maxAssistMin: 60 * 24 * 7, text: 200, channelText: 20
+};
 var STAGES = ['開始做', '進烤箱', '出爐', '開始包裝', '包裝完'];
 var TIME_KEYS = ['start', 'ovenIn', 'ovenOut', 'packStart', 'packEnd'];
 var STAGE_STATUS = ['尚未開始', '製作中', '烤箱中', '冷卻中', '包裝中', '待填數量'];
-var CHANNELS = ['團購', '自售'];
+var DEFAULT_CHANNELS = ['團購', '自售'];
 var UNIT_PRESETS = ['盒', '顆', '盤', '片', '條'];
+
+/**
+ * 真正在耗人力的兩個階段：1＝製作中（按過開始做）、4＝包裝中（按過開始包裝）。
+ * 烤箱中、冷卻中不算人力——那兩段本來就該並行，暫停鍵不出現、也不會被自動互斥碰到。
+ */
+var LABOR_STAGES = [1, 4];
 
 var K = {
   items: 'moodri.timer.items.v1',
+  channels: 'moodri.timer.channels.v1',
+  channelsSeeded: 'moodri.timer.channelsseeded.v1',
   cards: 'moodri.timer.cards.v1',
   ship: 'moodri.timer.ship.v1',
   queue: 'moodri.timer.queue.v1',
@@ -449,6 +467,7 @@ function toast(msg) {
 
 var S = {
   items: load(K.items, []),
+  channels: load(K.channels, []),
   cards: load(K.cards, []),
   ship: load(K.ship, null),
   queue: load(K.queue, []),
@@ -459,6 +478,7 @@ var S = {
 };
 
 function saveItems() { save(K.items, S.items); }
+function saveChannels() { save(K.channels, S.channels); }
 function saveCards() { save(K.cards, S.cards); }
 function saveShip() { save(K.ship, S.ship); }
 function saveQueue() { save(K.queue, S.queue); }
@@ -471,8 +491,16 @@ function findItem(itemUuid) {
   for (var i = 0; i < S.items.length; i++) if (S.items[i].itemUuid === itemUuid) return S.items[i];
   return null;
 }
+function liveChannels() {
+  return S.channels.filter(function (ch) { return !ch.deleted; })
+    .sort(function (a, b) { return (a.order || 0) - (b.order || 0); });
+}
+function findChannel(channelUuid) {
+  for (var i = 0; i < S.channels.length; i++) if (S.channels[i].channelUuid === channelUuid) return S.channels[i];
+  return null;
+}
 function pendingRecords() {
-  return S.queue.filter(function (q) { return q.type !== 'items' && q.state === 'pending'; });
+  return S.queue.filter(function (q) { return !isListType(q.type) && q.state === 'pending'; });
 }
 function stuckRecords() {
   return S.queue.filter(function (q) { return q.state === 'stuck'; });
@@ -484,8 +512,11 @@ function stuckRecords() {
  * 進佇列。同一個 uuid 只留一筆：更正就是「同 UUID + 較大的修訂序號」，
  * 舊的那筆留著只會讓補送時把舊值又推上去一次。
  */
+/** 清單型備份（品項、通路）：沒有查核管道，送出去就算數，不留在「待確認」裡 */
+function isListType(type) { return type === 'items' || type === 'channels'; }
+
 function enqueue(type, record, label) {
-  var key = type === 'items' ? record.itemUuid : record.uuid;
+  var key = record.uuid || record.itemUuid || record.channelUuid;
   var idx = -1;
   for (var i = 0; i < S.queue.length; i++) {
     if (S.queue[i].type === type && S.queue[i].key === key) { idx = i; break; }
@@ -494,7 +525,7 @@ function enqueue(type, record, label) {
     qid: idx >= 0 ? S.queue[idx].qid : uuid(),
     type: type,
     key: key,
-    rev: type === 'items' ? 0 : record.rev,
+    rev: isListType(type) ? 0 : record.rev,
     state: 'pending',
     miss: 0,   // 改過內容就重新算，之前被擋下來的理由可能已經修好了
     label: label || (idx >= 0 ? S.queue[idx].label : ''),
@@ -600,12 +631,13 @@ function sync(silent) {
   syncing = true;
   render();
 
-  var byType = { production: [], shipping: [], items: [] };
+  var byType = { production: [], shipping: [], items: [], channels: [] };
   outbox.forEach(function (q) { if (byType[q.type]) byType[q.type].push(q); });
 
+  var BATCH_SIZE = { items: LIMITS.itemsBatch, channels: LIMITS.channelsBatch };
   var jobs = [];
-  ['production', 'shipping', 'items'].forEach(function (type) {
-    var size = type === 'items' ? LIMITS.itemsBatch : LIMITS.batch;
+  ['production', 'shipping', 'items', 'channels'].forEach(function (type) {
+    var size = BATCH_SIZE[type] || LIMITS.batch;
     chunk(byType[type], size).forEach(function (group) { jobs.push({ type: type, group: group }); });
   });
 
@@ -617,8 +649,8 @@ function sync(silent) {
       return post(job.type, job.group.map(function (q) { return q.data; })).then(function () {
         sentOk += job.group.length;
         job.group.forEach(function (q) {
-          if (q.type === 'items') {
-            // 品項備份是單向備份，後端也沒有查核管道（JSONP 只查生產／出貨的 UUID），
+          if (isListType(q.type)) {
+            // 品項與通路都是單向備份，後端也沒有查核管道（JSONP 只查生產／出貨的 UUID），
             // 所以送出去就算數，不留在佇列裡。
             q.state = 'sent';
           }
@@ -760,9 +792,81 @@ function findCard(id) {
   return null;
 }
 
+/* ---- 生產：暫停／繼續與人力互斥 ------------------------------------ */
+
+/**
+ * 為什麼暫停要另外記一個數字、而不是把時間戳往後挪：
+ * 挪時間戳等於竄改紀錄，上傳的「開始做 09:00、進烤箱 10:00」會跟真實時鐘對不上，
+ * 事後查帳沒人搞得懂。存暫停分鐘，五個時間點就還是真的那五個時間點。
+ */
+function inLaborStage(c) { return LABOR_STAGES.indexOf(c.stage) >= 0; }
+function isPaused(c) { return !!c.pauseStartedAt; }
+
+/** 累計暫停毫秒。正在暫停中的話，把「這一段還在跑的」也算進去 */
+function pausedTotalMs(c) {
+  var base = c.pausedMs || 0;
+  if (c.pauseStartedAt) {
+    var d = Date.now() - new Date(c.pauseStartedAt).getTime();
+    if (d > 0) base += d;
+  }
+  return base;
+}
+function pauseMinutes(c) { return Math.round(pausedTotalMs(c) / 60000 * 10) / 10; }
+
+/** 卡片右下角那行字。暫停中就只講暫停了幾分，別再重複一次「已暫停」 */
+function cardStatusText(c) {
+  var pm = pauseMinutes(c);
+  if (isPaused(c)) return '已暫停 ' + pm + ' 分';
+  var st = STAGE_STATUS[Math.min(c.stage, STAGE_STATUS.length - 1)];
+  return pm > 0 ? st + '・暫停過 ' + pm + ' 分' : st;
+}
+
+/** 把還在跑的那一段結算進 pausedMs，並解除暫停狀態。已經沒在暫停就什麼都不做 */
+function settlePause(c) {
+  if (!c.pauseStartedAt) return;
+  c.pausedMs = pausedTotalMs(c);
+  c.pauseStartedAt = null;
+}
+
+/**
+ * 人力階段自動互斥：同一時間只允許一張卡在算人力。
+ *
+ * 以前兩張卡同時停在「製作中」時，兩邊的人力會各自累加，等於同一段時間被算了兩次。
+ * 這條就是把規格裡「一個人同時只能做一件事」真的寫進程式。
+ * 只管製作中／包裝中，烤箱中與冷卻中本來就該並行，不可誤暫停。
+ */
+function pauseOtherLaborCards(exceptId) {
+  var paused = [];
+  S.cards.forEach(function (o) {
+    if (o.id === exceptId || !inLaborStage(o) || isPaused(o)) return;
+    o.pauseStartedAt = isoLocal(new Date());
+    paused.push(o.itemName + (o.batchNote ? ' ' + o.batchNote : ''));
+  });
+  if (paused.length > 0) toast('已自動暫停 ' + paused.join('、'));
+  return paused.length;
+}
+
+function pauseCard(id) {
+  var c = findCard(id);
+  if (!c || !inLaborStage(c) || isPaused(c)) return;
+  c.pauseStartedAt = isoLocal(new Date());
+  saveCards();
+  render();
+}
+
+function resumeCard(id) {
+  var c = findCard(id);
+  if (!c || !isPaused(c)) return;
+  settlePause(c);
+  pauseOtherLaborCards(c.id);   // 繼續等於重新開始佔用人力，其他張要讓開
+  saveCards();
+  render();
+}
+
 function advance(id) {
   var c = findCard(id);
   if (!c) return;
+  if (isPaused(c)) { resumeCard(id); return; }   // 暫停中主按鈕是「▶ 繼續」
   if (c.stage >= TIME_KEYS.length) { openQty(c.id); return; }
   var now = new Date();
   var prevKey = c.stage > 0 ? TIME_KEYS[c.stage - 1] : null;
@@ -774,6 +878,8 @@ function advance(id) {
   c.times[TIME_KEYS[c.stage]] = isoLocal(now);
   if (c.stage === 0) c.batchNote = nextBatchNote(c.itemUuid, localDateKey(now));
   c.stage++;
+  // 剛踏進人力階段，其他還在算人力的卡片要自動暫停
+  if (inLaborStage(c)) pauseOtherLaborCards(c.id);
   saveCards();
   render();
   if (c.stage >= TIME_KEYS.length) openQty(c.id);
@@ -789,10 +895,11 @@ function undo(id) {
     render();
     return;
   }
+  settlePause(c);   // 退回上一步時不要留著一個還在跑的暫停，否則會一直累積
   c.stage--;
   delete c.times[TIME_KEYS[c.stage]];
   // 復原掉「開始做」就把爐號還回去，否則這個號碼會被佔著，下一張卡跳號
-  if (c.stage === 0) c.batchNote = '';
+  if (c.stage === 0) { c.batchNote = ''; c.pausedMs = 0; }
   saveCards();
   render();
 }
@@ -876,6 +983,7 @@ function buildProduction(card, qty, note, rev, status) {
     packEnd: card.times.packEnd,
     qty: qty,
     unit: card.unit || '',
+    pauseMin: pauseMinutes(card),
     note: note || '',
     status: status || '正常',
     rev: rev || 0,
@@ -893,7 +1001,14 @@ function commitQty() {
   if (isNaN(trays) || trays < 0 || trays > 99) { toast('盤數要在 0～99 之間，不知道就留空'); return; }
   var note = trimText(qtyState.note);
 
+  settlePause(c);   // 還在暫停中就先結算，pauseMin 才是完整的
   var rec = buildProduction(c, qty, note, 0, '正常');
+  // 暫停比實際工作還久會被後端擋下，在這裡先講清楚，不要讓它變成「送不出去」的一筆
+  var gross = laborGrossMin(rec);
+  if (rec.pauseMin > gross) {
+    toast('暫停 ' + rec.pauseMin + ' 分比實際工作的 ' + gross + ' 分還久，先到紀錄面板確認一下');
+    return;
+  }
   rec.batchNote = withTrays(c.batchNote, trays);
   enqueue('production', rec, c.itemName + '｜' + (rec.batchNote || ''));
   S.lastQty[c.itemUuid] = qty;
@@ -926,7 +1041,7 @@ function endShip() {
   if (!S.ship) return;
   var end = isoLocal(new Date());
   if (new Date(end).getTime() < new Date(S.ship.start).getTime()) { toast('結束時間比開始還早，先確認手機時間'); return; }
-  shipState = { start: S.ship.start, end: end, channel: '', items: [], orderCount: 1, boxCount: 1, note: '' };
+  shipState = { start: S.ship.start, end: end, channel: '', items: [], orderCount: 1, boxCount: 1, assist: '', note: '' };
   renderShipSheet();
 }
 
@@ -938,22 +1053,27 @@ function captureShipInputs() {
   if (!shipState) return;
   var o = document.getElementById('ordVal');
   var b = document.getElementById('boxVal');
+  var a = document.getElementById('shipAssist');
   var n = document.getElementById('shipNote');
   if (o && o.value !== '') shipState.orderCount = Math.max(0, Math.round(Number(o.value)) || 0);
   if (b && b.value !== '') shipState.boxCount = Math.max(0, Math.round(Number(b.value)) || 0);
+  if (a) shipState.assist = a.value;
   if (n) shipState.note = n.value;
 }
 
 function renderShipSheet() {
   var mins = Math.round((new Date(shipState.end) - new Date(shipState.start)) / 60000);
   var items = liveItems();
+  var chans = liveChannels();
   sheetHtml(
     '<h2>這趟出貨做完了</h2>' +
     '<p class="hint">' + fmtClock(shipState.start) + ' → ' + fmtClock(shipState.end) + '，共 ' + mins + ' 分鐘。</p>' +
     '<div class="tm-fieldlabel">通路</div>' +
-    '<div class="tm-chips">' + CHANNELS.map(function (ch) {
-      return '<button type="button" data-act="ship-ch" data-ch="' + esc(ch) + '" aria-pressed="' + (shipState.channel === ch) + '">' + esc(ch) + '</button>';
-    }).join('') + '</div>' +
+    (chans.length
+      ? '<div class="tm-chips">' + chans.map(function (ch) {
+          return '<button type="button" data-act="ship-ch" data-ch="' + esc(ch.name) + '" aria-pressed="' + (shipState.channel === ch.name) + '">' + esc(ch.name) + '</button>' ;
+        }).join('') + '<button type="button" data-act="open-channels">⚙ 管理通路</button></div>'
+      : '<p class="tm-empty">還沒有通路。<button type="button" data-act="open-channels">建立通路</button></p>') +
     // 只記「這批出的是哪些品項」，不記各自花多久。
     // 包一張訂單時手上同時有好幾個品項，硬要拆成各自幾分鐘只能用猜的。
     // 之後某批剛好是單一品項，就能回頭比較不同品項的每筆時間；混批就當混批看。
@@ -975,6 +1095,12 @@ function renderShipSheet() {
       '<input class="val" id="boxVal" type="number" inputmode="numeric" min="0" max="' + LIMITS.maxBoxCount + '" value="' + shipState.boxCount + '">' +
       '<button type="button" data-act="box+" aria-label="總盒數加一">＋</button>' +
     '</div>' +
+    // 記「協助了幾分鐘」而不是「幾個人」：協助者不是全程也不是主力，
+    // 記人數等於假設兩個人從頭做到尾，人力會直接高估一倍
+    '<div class="tm-segrow" style="margin-top:16px">' +
+      '<span>有人幫忙幾分鐘（沒有就留空）</span>' +
+      '<input class="tm-input" id="shipAssist" type="number" inputmode="numeric" min="0" value="' + esc(shipState.assist) + '">' +
+    '</div>' +
     '<div class="tm-fieldlabel">備註（可留空）</div>' +
     '<input class="tm-input" id="shipNote" type="text" maxlength="' + LIMITS.text + '" value="' + esc(shipState.note) + '">' +
     '<div class="tm-sheetfoot">' +
@@ -985,11 +1111,15 @@ function renderShipSheet() {
 }
 
 function commitShip() {
-  if (CHANNELS.indexOf(shipState.channel) === -1) { toast('先選通路：團購或自售'); return; }
+  if (!shipState.channel) { toast('先選通路'); return; }
   var ord = Math.round(Number(document.getElementById('ordVal').value));
   var box = Math.round(Number(document.getElementById('boxVal').value));
   if (isNaN(ord) || ord < 0 || ord > LIMITS.maxOrderCount) { toast('訂單筆數要在 0～' + LIMITS.maxOrderCount + ' 之間'); return; }
   if (isNaN(box) || box < 0 || box > LIMITS.maxBoxCount) { toast('總盒數要在 0～' + LIMITS.maxBoxCount + ' 之間'); return; }
+  var assistEl = document.getElementById('shipAssist');
+  var assistRaw = assistEl ? String(assistEl.value).trim() : '';
+  var assist = assistRaw === '' ? 0 : Number(assistRaw);
+  if (isNaN(assist) || assist < 0 || assist > LIMITS.maxAssistMin) { toast('協助分鐘要是 0 以上的數字，沒有就留空'); return; }
 
   // 品項寫進 note，不另開欄位：後端的出貨分頁欄位是固定的，
   // 加欄位要連 validateShipping 一起改再重新部署，第一版不划算。
@@ -1009,6 +1139,7 @@ function commitShip() {
     end: shipState.end,
     orderCount: ord,
     boxCount: box,
+    assistMin: assist,
     note: note,
     status: '正常',
     rev: 0,
@@ -1140,6 +1271,8 @@ function commitManual() {
     packStart: isoLocal(stamps[3]), packEnd: isoLocal(stamps[4]),
     qty: Math.round(qty),
     unit: item.unit || '',
+    // 補登填的是「每段實際花多久」，等待的時間本來就沒被算進去，不需要再扣暫停
+    pauseMin: 0,
     note: trimText(manualState.note),
     status: '正常',
     rev: 0,
@@ -1266,6 +1399,127 @@ function moveItem(id, dir) {
   sync(true);
 }
 
+/* ---- 通路管理 ------------------------------------------------------ */
+
+/**
+ * 通路（團購／自售／市集…）改成自己維護，後端不再有寫死的白名單。
+ * 做法整套比照品項清單：手機是主檔，試算表那張「通路清單備份」只是還原來源。
+ *
+ * 代價是後端不再幫忙擋錯字，「團購」跟「團購 」會變成兩個通路。
+ * 換到的是新增通路不必改程式、不必重新部署；日常是點按鈕選，只有新增那次要打字。
+ */
+function openChannels() {
+  renderChannelsSheet();
+}
+
+function renderChannelsSheet() {
+  var list = liveChannels();
+  var rows = list.map(function (ch, i) {
+    return '<li>' +
+      '<span class="name">' + esc(ch.name) + '</span>' +
+      '<span class="ops">' +
+        '<button type="button" data-act="ch-up" data-id="' + esc(ch.channelUuid) + '"' + (i === 0 ? ' disabled' : '') + '>↑</button>' +
+        '<button type="button" data-act="ch-down" data-id="' + esc(ch.channelUuid) + '"' + (i === list.length - 1 ? ' disabled' : '') + '>↓</button>' +
+        '<button type="button" data-act="ch-rename" data-id="' + esc(ch.channelUuid) + '">改名</button>' +
+        '<button type="button" data-act="ch-del" data-id="' + esc(ch.channelUuid) + '" class="danger">刪除</button>' +
+      '</span></li>';
+  }).join('');
+
+  sheetHtml(
+    '<h2>通路管理</h2>' +
+    '<p class="hint">刪掉通路不會影響已經記過的出貨紀錄，那些留的是當時的名稱。改名也一樣，舊紀錄不會跟著變。</p>' +
+    (rows ? '<ul class="tm-list">' + rows + '</ul>' : '<p class="tm-empty">還沒有通路。在下面新增第一個。</p>') +
+    '<div class="tm-fieldlabel">新增通路</div>' +
+    '<input class="tm-input" id="newChName" type="text" maxlength="' + LIMITS.channelText + '" placeholder="例：市集、寄賣">' +
+    '<div class="tm-sheetfoot">' +
+      '<button class="tm-btn" type="button" data-act="ch-done">完成</button>' +
+      '<button class="tm-btn primary" type="button" data-act="ch-add">＋ 新增</button>' +
+    '</div>'
+  );
+}
+
+function syncChannel(ch) {
+  enqueue('channels', {
+    channelUuid: ch.channelUuid,
+    name: ch.name,
+    order: ch.order || 0,
+    deleted: !!ch.deleted,
+    updatedAt: isoLocal(new Date())
+  }, '通路｜' + ch.name);
+}
+
+/** 新增一個通路並排進備份佇列。回傳新的通路物件 */
+function createChannel(name, order) {
+  var ch = { channelUuid: uuid(), name: name, order: order, deleted: false };
+  S.channels.push(ch);
+  syncChannel(ch);
+  return ch;
+}
+
+function addChannel() {
+  var el = document.getElementById('newChName');
+  var name = String(el ? el.value : '').trim().slice(0, LIMITS.channelText);
+  if (!name) { toast('先輸入通路名稱'); return; }
+  if (liveChannels().some(function (x) { return x.name === name; })) { toast('已經有「' + name + '」了'); return; }
+  var maxOrder = S.channels.reduce(function (m, x) { return Math.max(m, x.order || 0); }, 0);
+  createChannel(name, maxOrder + 1);
+  saveChannels();
+  renderChannelsSheet();
+  sync(true);
+}
+
+function renameChannel(id) {
+  var ch = findChannel(id);
+  if (!ch) return;
+  var name = String(window.prompt('新的名稱', ch.name) || '').trim().slice(0, LIMITS.channelText);
+  if (!name || name === ch.name) return;
+  ch.name = name;
+  saveChannels();
+  syncChannel(ch);
+  renderChannelsSheet();
+  sync(true);
+}
+
+function deleteChannel(id) {
+  var ch = findChannel(id);
+  if (!ch) return;
+  if (!window.confirm('確定刪掉「' + ch.name + '」？已經記過的出貨紀錄不受影響。')) return;
+  ch.deleted = true;
+  saveChannels();
+  syncChannel(ch);
+  renderChannelsSheet();
+  sync(true);
+}
+
+function moveChannel(id, dir) {
+  var list = liveChannels();
+  var i = -1;
+  for (var k = 0; k < list.length; k++) if (list[k].channelUuid === id) { i = k; break; }
+  var j = i + dir;
+  if (i < 0 || j < 0 || j >= list.length) return;
+  var a = list[i], b = list[j];
+  var tmp = a.order; a.order = b.order; b.order = tmp;
+  saveChannels();
+  syncChannel(a);
+  syncChannel(b);
+  renderChannelsSheet();
+  sync(true);
+}
+
+/**
+ * 第一次使用時把「團購／自售」建起來，不然更新完打開會發現沒得選。
+ * 用旗標記住「已經種過了」——沒有這個旗標的話，自己把通路全刪掉後
+ * 下次開頁又會長回來，等於刪不掉。
+ */
+function seedDefaultChannels() {
+  if (load(K.channelsSeeded, false)) return 0;
+  save(K.channelsSeeded, true);
+  if (liveChannels().length > 0) return 0;
+  DEFAULT_CHANNELS.forEach(function (name, i) { createChannel(name, i + 1); });
+  saveChannels();
+  return DEFAULT_CHANNELS.length;
+}
+
 /* ---- 待確認清單與更正流程 ------------------------------------------ */
 
 function openQueue() {
@@ -1283,11 +1537,15 @@ function queueRowHtml(q) {
 
   var sub;
   if (q.type === 'production') {
+    var pm = Number(q.data.pauseMin) || 0;
     sub = fmtClock(q.data.start) + '→' + fmtClock(q.data.packEnd) + '｜' + q.data.qty + (q.data.unit || '') +
-      '｜人力 ' + laborMin(q.data) + ' 分、冷卻 ' + coolMin(q.data) + ' 分';
+      '｜人力 ' + laborMin(q.data) + ' 分' + (pm > 0 ? '（已扣暫停 ' + pm + ' 分）' : '') +
+      '、冷卻 ' + coolMin(q.data) + ' 分';
   } else {
     var mins = Math.round((new Date(q.data.end) - new Date(q.data.start)) / 60000);
-    sub = fmtClock(q.data.start) + '→' + fmtClock(q.data.end) + '｜' + mins + ' 分｜' +
+    var am = Number(q.data.assistMin) || 0;
+    sub = fmtClock(q.data.start) + '→' + fmtClock(q.data.end) + '｜' + mins + ' 分' +
+      (am > 0 ? '＋協助 ' + am + ' 分' : '') + '｜' +
       q.data.orderCount + ' 筆 / ' + q.data.boxCount + ' 盒';
   }
 
@@ -1309,10 +1567,14 @@ function queueRowHtml(q) {
     '</li>';
 }
 
-function laborMin(d) {
+/** 人力毛時間：還沒扣暫停的那個數字。後端擋「暫停 > 毛時間」也是拿這個比 */
+function laborGrossMin(d) {
   var a = (new Date(d.ovenIn) - new Date(d.start)) / 60000;
   var b = (new Date(d.packEnd) - new Date(d.packStart)) / 60000;
   return Math.round((a + b) * 10) / 10;
+}
+function laborMin(d) {
+  return Math.round((laborGrossMin(d) - (Number(d.pauseMin) || 0)) * 10) / 10;
 }
 function coolMin(d) {
   return Math.round(((new Date(d.packStart) - new Date(d.ovenOut)) / 60000) * 10) / 10;
@@ -1385,6 +1647,8 @@ function renderEditSheet() {
     body =
       '<div class="tm-fieldlabel">產出數量（' + esc(d.unit || '份') + '）</div>' +
       '<input class="tm-input" id="edQty" type="number" inputmode="numeric" min="0" max="' + LIMITS.maxQty + '" value="' + d.qty + '">' +
+      '<div class="tm-fieldlabel">暫停分鐘（人力會扣掉這些；這段的實際工作時間是 ' + laborGrossMin(d) + ' 分）</div>' +
+      '<input class="tm-input" id="edPause" type="number" inputmode="numeric" min="0" value="' + esc(Number(d.pauseMin) || 0) + '">' +
       '<div class="tm-fieldlabel">批次備註</div>' +
       '<input class="tm-input" id="edBatch" type="text" maxlength="' + LIMITS.text + '" value="' + esc(d.batchNote || '') + '">';
   } else {
@@ -1392,7 +1656,9 @@ function renderEditSheet() {
       '<div class="tm-fieldlabel">訂單筆數</div>' +
       '<input class="tm-input" id="edOrd" type="number" inputmode="numeric" min="0" max="' + LIMITS.maxOrderCount + '" value="' + d.orderCount + '">' +
       '<div class="tm-fieldlabel">總盒數</div>' +
-      '<input class="tm-input" id="edBox" type="number" inputmode="numeric" min="0" max="' + LIMITS.maxBoxCount + '" value="' + d.boxCount + '">';
+      '<input class="tm-input" id="edBox" type="number" inputmode="numeric" min="0" max="' + LIMITS.maxBoxCount + '" value="' + d.boxCount + '">' +
+      '<div class="tm-fieldlabel">協助分鐘（沒有就填 0）</div>' +
+      '<input class="tm-input" id="edAssist" type="number" inputmode="numeric" min="0" value="' + esc(Number(d.assistMin) || 0) + '">';
   }
   sheetHtml(
     '<h2>修改待確認的紀錄</h2>' +
@@ -1414,15 +1680,22 @@ function commitEdit() {
   if (q.type === 'production') {
     var qty = Math.round(Number(document.getElementById('edQty').value));
     if (isNaN(qty) || qty < 0 || qty > LIMITS.maxQty) { toast('數量要在 0～' + LIMITS.maxQty + ' 之間'); return; }
+    var pause = Number(document.getElementById('edPause').value);
+    if (isNaN(pause) || pause < 0) { toast('暫停分鐘要是 0 以上的數字'); return; }
+    if (pause > laborGrossMin(d)) { toast('暫停不能比實際工作的 ' + laborGrossMin(d) + ' 分還久，後端會擋下來'); return; }
     d.qty = qty;
+    d.pauseMin = Math.round(pause * 10) / 10;
     d.batchNote = trimText(document.getElementById('edBatch').value);
   } else {
     var ord = Math.round(Number(document.getElementById('edOrd').value));
     var box = Math.round(Number(document.getElementById('edBox').value));
+    var assist = Number(document.getElementById('edAssist').value);
     if (isNaN(ord) || ord < 0 || ord > LIMITS.maxOrderCount) { toast('訂單筆數超出範圍'); return; }
     if (isNaN(box) || box < 0 || box > LIMITS.maxBoxCount) { toast('總盒數超出範圍'); return; }
+    if (isNaN(assist) || assist < 0 || assist > LIMITS.maxAssistMin) { toast('協助分鐘超出範圍'); return; }
     d.orderCount = ord;
     d.boxCount = box;
+    d.assistMin = Math.round(assist * 10) / 10;
   }
   d.note = trimText(document.getElementById('edNote').value);
   d.rev = q.rev + 1;
@@ -1463,6 +1736,10 @@ function openSettings() {
     '<div class="tm-sheetfoot">' +
       '<button class="tm-btn" type="button" data-act="set-restore">從試算表還原品項</button>' +
       '<button class="tm-btn primary" type="button" data-act="set-save">儲存網址</button>' +
+    '</div>' +
+    '<div class="tm-sheetfoot">' +
+      '<button class="tm-btn" type="button" data-act="set-restore-ch">從試算表還原通路</button>' +
+      '<button class="tm-btn" type="button" data-act="set-channels">通路管理</button>' +
     '</div>' +
     '<div class="tm-sheetfoot">' +
       '<button class="tm-btn" type="button" data-act="set-ping">測試連線</button>' +
@@ -1530,6 +1807,63 @@ function maybeAutoRestoreItems() {
   restoreItems(true);
 }
 
+/**
+ * 通路還原。跟品項的差別是「同名的就不再加一次」——
+ * 離線第一次使用時會先自己種出團購／自售，之後連上網路還原到試算表上的同名通路，
+ * 沒有這道去重就會變成畫面上兩顆「團購」。
+ */
+function restoreChannels(silent) {
+  if (!navigator.onLine) {
+    if (!silent) toast('目前離線，還原需要連線');
+    return Promise.resolve(0);
+  }
+  if (!silent) toast('還原中…');
+  return jsonp({ action: 'channels' }).then(function (res) {
+    if (!res || !res.ok || !Array.isArray(res.channels)) {
+      if (!silent) toast('還原失敗：後端沒有回通路');
+      return 0;
+    }
+    channelInitDone = true;
+    var names = {};
+    liveChannels().forEach(function (c) { names[c.name] = true; });
+    var added = 0;
+    res.channels.forEach(function (r) {
+      if (!r || !r.channelUuid) return;
+      if (findChannel(r.channelUuid) || names[r.name]) return;
+      S.channels.push({ channelUuid: r.channelUuid, name: r.name, order: Number(r.order) || 0, deleted: false });
+      names[r.name] = true;
+      added++;
+    });
+    if (added > 0) { saveChannels(); render(); toast('從試算表還原了 ' + added + ' 個通路'); }
+    else if (!silent) toast('沒有需要還原的通路');
+    return added;
+  }).catch(function (e) {
+    if (!silent) toast('還原失敗：' + (e && e.message ? e.message : '連線問題'));
+    return 0;
+  });
+}
+
+/**
+ * 通路的開機準備：本機有就什麼都不做；沒有的話先去試算表撈，
+ * 撈不到（或離線）才自己種預設的兩個。順序刻意是「先撈再種」，
+ * 反過來會在換手機時把試算表上既有的通路變成重複的一份。
+ */
+var channelInitDone = false;
+function maybeInitChannels() {
+  if (channelInitDone) return;
+  if (liveChannels().length > 0) { channelInitDone = true; return; }
+  if (!navigator.onLine) {
+    // 離線也要能出貨，先種預設值；之後連上網路還原時會用名稱去重
+    if (seedDefaultChannels() > 0) render();
+    return;
+  }
+  restoreChannels(true).then(function (added) {
+    if (added === 0 && liveChannels().length === 0) {
+      if (seedDefaultChannels() > 0) { render(); sync(true); }
+    }
+  });
+}
+
 function pingBackend() {
   if (!navigator.onLine) { toast('目前離線'); return; }
   toast('測試中…');
@@ -1564,21 +1898,30 @@ function cardHtml(c) {
     return '<div class="tm-step ' + cls + '">' + s + '<time>' + t + '</time></div>';
   }).join('');
   var done = c.stage >= TIME_KEYS.length;
-  var label = done ? '填數量' : STAGES[c.stage];
+  var paused = isPaused(c);
+  // 暫停時主按鈕整顆變「▶ 繼續」。要繼續就按那顆最大的，不必瞄準小按鈕
+  var label = paused ? '▶ 繼續' : (done ? '填數量' : STAGES[c.stage]);
   var elapsed = c.times.start ? fmtSpan(Date.now() - new Date(c.times.start).getTime()) : '尚未開始';
-  var status = STAGE_STATUS[Math.min(c.stage, STAGE_STATUS.length - 1)];
+  var mainCls = paused ? ' paused' : ((done || c.stage === TIME_KEYS.length - 1) ? ' finish' : '');
 
-  return '<article class="tm-card" data-id="' + esc(c.id) + '">' +
+  return '<article class="tm-card' + (paused ? ' is-paused' : '') + '" data-id="' + esc(c.id) + '">' +
     '<div class="tm-cardbody">' +
       '<h3><span class="nm">' + esc(c.itemName) + '</span>' +
       (c.batchNote ? '<small>' + esc(c.batchNote) + '</small>' : '') +
       '<span class="tm-elapsed" data-elapsed="' + esc(c.id) + '">' + esc(elapsed) + '</span></h3>' +
       '<div class="tm-steps">' + steps + '</div>' +
     '</div>' +
-    '<button class="tm-main' + (done || c.stage === TIME_KEYS.length - 1 ? ' finish' : '') + '" type="button" data-act="advance" data-id="' + esc(c.id) + '">' + esc(label) + '</button>' +
+    '<button class="tm-main' + mainCls + '" type="button" data-act="advance" data-id="' + esc(c.id) + '">' + esc(label) + '</button>' +
     '<div class="tm-foot">' +
       '<button class="tm-undo" type="button" data-act="undo" data-id="' + esc(c.id) + '">↩ 復原上一步</button>' +
-      '<span class="tm-status' + (done ? ' wait' : '') + '">' + esc(status) + '</span>' +
+      // 暫停鍵只在真正算人力的兩個階段出現。烤箱中／冷卻中本來就沒在工作，
+      // 能按只會產生看不懂的資料
+      (inLaborStage(c) && !paused
+        ? '<button class="tm-undo" type="button" data-act="pause" data-id="' + esc(c.id) + '">⏸ 暫停</button>'
+        : '') +
+      '<span class="tm-status' + (paused ? ' paused' : (done ? ' wait' : '')) + '" data-pausedlabel="' + esc(c.id) + '">' +
+        esc(cardStatusText(c)) +
+      '</span>' +
     '</div>' +
   '</article>';
 }
@@ -1645,6 +1988,9 @@ function render() {
 // 只更新「已 N 分」，不整批重畫。重畫會把使用者正按著的按鈕換掉
 function tick() {
   S.cards.forEach(function (c) {
+    // 暫停中的分鐘數會一直長，跟著更新，不必整張重畫
+    var pl = document.querySelector('[data-pausedlabel="' + c.id + '"]');
+    if (pl) pl.textContent = cardStatusText(c);
     if (!c.times.start) return;
     var el = document.querySelector('[data-elapsed="' + c.id + '"]');
     if (el) el.textContent = fmtSpan(Date.now() - new Date(c.times.start).getTime());
@@ -1662,6 +2008,7 @@ var ACTIONS = {
   'open-items': function () { openItems(); },
   'advance': function (el) { advance(el.dataset.id); },
   'undo': function (el) { undo(el.dataset.id); },
+  'pause': function (el) { pauseCard(el.dataset.id); },
 
   'qty+': function () { bumpQty(1); },
   'qty-': function () { bumpQty(-1); },
@@ -1697,6 +2044,15 @@ var ACTIONS = {
   'item-up': function (el) { moveItem(el.dataset.id, -1); },
   'item-down': function (el) { moveItem(el.dataset.id, 1); },
 
+  'open-channels': function () { openChannels(); },
+  'ch-add': function () { addChannel(); },
+  'ch-rename': function (el) { renameChannel(el.dataset.id); },
+  'ch-del': function (el) { deleteChannel(el.dataset.id); },
+  'ch-up': function (el) { moveChannel(el.dataset.id, -1); },
+  'ch-down': function (el) { moveChannel(el.dataset.id, 1); },
+  // 通路是從出貨表單點進來的，關掉時要回到那張表單，不是把整個面板關掉
+  'ch-done': function () { if (shipState) renderShipSheet(); else closeSheet(); },
+
   'q-edit': function (el) { openEdit(el.dataset.qid); },
   'q-retry': function (el) { retryRecord(el.dataset.qid); },
   'q-void': function (el) { voidRecord(el.dataset.qid); },
@@ -1706,6 +2062,8 @@ var ACTIONS = {
 
   'set-save': function () { saveEndpoint(); },
   'set-restore': function () { restoreItems(false); },
+  'set-restore-ch': function () { restoreChannels(false); },
+  'set-channels': function () { openChannels(); },
   'set-ping': function () { pingBackend(); },
 
   'close': function () { closeSheet(); }
@@ -1741,10 +2099,10 @@ document.getElementById('manualBtn').addEventListener('click', openManual);
 document.getElementById('settingsBtn').addEventListener('click', openSettings);
 modal.addEventListener('click', function (e) { if (e.target === modal) closeSheet(); });
 
-window.addEventListener('online', function () { render(); sync(true); maybeAutoRestoreItems(); });
+window.addEventListener('online', function () { render(); sync(true); maybeAutoRestoreItems(); maybeInitChannels(); });
 window.addEventListener('offline', render);
 document.addEventListener('visibilitychange', function () {
-  if (!document.hidden) { render(); sync(true); maybeAutoRestoreItems(); }
+  if (!document.hidden) { render(); sync(true); maybeAutoRestoreItems(); maybeInitChannels(); }
 });
 
 /* ---- 啟動 ---------------------------------------------------------- */
@@ -1752,6 +2110,7 @@ document.addEventListener('visibilitychange', function () {
 pruneQueue();
 render();
 maybeAutoRestoreItems();
+maybeInitChannels();
 tick();
 setInterval(tick, 15000);
 setInterval(function () { if (pendingRecords().length > 0 || S.queue.length > 0) sync(true); }, 120000);
@@ -1769,6 +2128,11 @@ if ('serviceWorker' in navigator && window.isSecureContext) {
 window.__timer = {
   S: S, K: K, STAGES: STAGES, TIME_KEYS: TIME_KEYS,
   addCard: addCard, advance: advance, undo: undo, render: render,
+  pauseCard: pauseCard, resumeCard: resumeCard, isPaused: isPaused,
+  inLaborStage: inLaborStage, pauseMinutes: pauseMinutes, laborMin: laborMin, laborGrossMin: laborGrossMin,
+  liveChannels: liveChannels, addChannel: addChannel, openChannels: openChannels,
+  deleteChannel: deleteChannel, renameChannel: renameChannel, moveChannel: moveChannel,
+  restoreChannels: restoreChannels, maybeInitChannels: maybeInitChannels, seedDefaultChannels: seedDefaultChannels,
   openQty: openQty, commitQty: commitQty, enqueue: enqueue,
   buildProduction: buildProduction, isoLocal: isoLocal, uuid: uuid,
   pendingRecords: pendingRecords, stuckRecords: stuckRecords, retryRecord: retryRecord,
