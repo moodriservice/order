@@ -1,0 +1,1417 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>暮日計時</title>
+
+<meta name="theme-color" content="#dd5434">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="暮日計時">
+<meta name="robots" content="noindex, nofollow">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="../logo-circle.jpg">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+
+<style>
+/* 這頁刻意鎖定單一視覺（暮日品牌的暖色日光感），不跟手機深色模式變動：
+   廚房裡看到的顏色每次都一樣，才不會在濕手時按錯顏色。
+   不載任何外部字型或函式庫——沒訊號也要能立刻開，是硬需求。 */
+:root{
+  color-scheme: light;
+  --brand:#dd5434;
+  --brand-dark:#b8401f;
+  --bg1:#fffaf7;
+  --bg2:#fff3ed;
+  --ink:#2b2320;
+  --muted:#8a7a73;
+  --line:rgba(0,0,0,.08);
+  --card:#fff;
+  --ok:#2e7d32;
+  --wait:#c98a00;
+  --void:#9aa0a6;
+  --shell:#2b2320;
+  --font:-apple-system,BlinkMacSystemFont,"PingFang TC","Noto Sans TC","Helvetica Neue",sans-serif;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  font-family:var(--font);
+  color:var(--ink);
+  background:linear-gradient(to bottom,var(--bg1),var(--bg2));
+  background-attachment:fixed;
+  min-height:100vh;
+  -webkit-user-select:none;user-select:none;
+  -webkit-tap-highlight-color:transparent;
+  -webkit-text-size-adjust:100%;
+}
+button{font-family:var(--font);cursor:pointer}
+button:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
+[hidden]{display:none !important}
+
+.tm-phone{max-width:430px;margin:0 auto;padding:0 12px calc(48px + env(safe-area-inset-bottom))}
+
+/* ---------- 頂端常駐列 ---------- */
+.tm-topbar{
+  position:sticky;top:0;z-index:20;margin:0 -12px 10px;
+  padding:calc(10px + env(safe-area-inset-top)) 14px 10px;
+  background:rgba(255,250,247,.94);backdrop-filter:blur(8px);
+  border-bottom:1px solid var(--line);
+  display:flex;align-items:center;gap:10px;
+}
+.tm-brandmark{font-weight:800;font-size:16px;color:var(--brand);letter-spacing:.5px;white-space:nowrap}
+.tm-pending{
+  margin-left:auto;font-size:13px;color:var(--wait);font-weight:700;
+  display:flex;align-items:center;gap:5px;font-variant-numeric:tabular-nums;
+  background:none;border:0;padding:8px 4px;min-height:40px;white-space:nowrap;
+}
+.tm-pending i{width:8px;height:8px;border-radius:50%;background:var(--wait);display:block;flex:0 0 auto}
+.tm-pending.clean{color:var(--ok)}
+.tm-pending.clean i{background:var(--ok)}
+.tm-sync{
+  font-size:13px;font-weight:700;padding:9px 14px;
+  border-radius:999px;border:1.5px solid var(--brand);background:#fff;color:var(--brand);
+  min-height:40px;white-space:nowrap;
+}
+.tm-sync[disabled]{opacity:.5}
+.tm-offline{
+  margin:0 -12px 10px;padding:8px 14px;background:#fdf0e6;border-bottom:1px solid var(--line);
+  font-size:12.5px;line-height:1.5;color:var(--brand-dark);
+}
+
+/* ---------- 頁籤 ---------- */
+.tm-tabs{display:flex;gap:8px;margin-bottom:12px}
+.tm-tabs button{
+  flex:1;font-size:16px;font-weight:700;padding:13px 0;
+  border-radius:14px;border:1.5px solid var(--line);background:#fff;color:var(--muted);min-height:50px;
+}
+.tm-tabs button[aria-pressed="true"]{background:var(--brand);border-color:var(--brand);color:#fff}
+
+.tm-sectitle{font-size:13px;font-weight:700;color:var(--muted);margin:14px 2px 8px;letter-spacing:.4px}
+.tm-empty{margin:8px 2px;font-size:13px;line-height:1.7;color:var(--muted)}
+
+/* ---------- 品項列 ---------- */
+.tm-items{display:flex;gap:8px;overflow-x:auto;padding-bottom:6px;scrollbar-width:none;-webkit-overflow-scrolling:touch}
+.tm-items::-webkit-scrollbar{display:none}
+.tm-items button{
+  flex:0 0 auto;font-size:16px;font-weight:700;
+  padding:0 18px;height:56px;border-radius:16px;
+  border:1.5px solid var(--brand);background:#fff;color:var(--brand);
+  max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+.tm-items button.add{border-style:dashed;border-color:var(--muted);color:var(--muted)}
+
+/* ---------- 卡片（草案 C：時間軸列） ---------- */
+.tm-cards{display:grid;gap:12px;grid-template-columns:1fr}
+.tm-card{
+  background:var(--card);border:1px solid var(--line);border-radius:18px;
+  box-shadow:0 3px 10px rgba(0,0,0,.05);
+  display:grid;grid-template-columns:1fr 128px;gap:12px;align-items:center;padding:12px;
+}
+.tm-cardbody{min-width:0}
+.tm-card h3{margin:0;font-size:17px;font-weight:800;display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+.tm-card h3 .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%}
+.tm-card h3 small{font-size:13px;font-weight:600;color:var(--muted)}
+.tm-elapsed{margin-left:auto;font-size:13px;color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
+
+.tm-steps{display:flex;gap:4px;margin:8px 0 0}
+.tm-step{
+  flex:1 1 0;min-width:0;text-align:center;font-size:11px;line-height:1.35;
+  padding:5px 1px;border-radius:8px;background:#f6f2f0;color:var(--muted);
+}
+.tm-step.done{background:#eaf4ea;color:var(--ok);font-weight:700}
+.tm-step.now{background:var(--brand);color:#fff;font-weight:800}
+.tm-step time{display:block;font-size:11px;font-variant-numeric:tabular-nums;opacity:.9}
+
+.tm-main{
+  width:100%;height:76px;font-size:19px;font-weight:800;
+  border:0;border-radius:16px;background:var(--brand);color:#fff;letter-spacing:0;
+  box-shadow:0 4px 0 var(--brand-dark);
+}
+.tm-main:active{transform:translateY(3px);box-shadow:0 1px 0 var(--brand-dark)}
+.tm-main.finish{background:var(--ok);box-shadow:0 4px 0 #1b5e20}
+.tm-main.finish:active{box-shadow:0 1px 0 #1b5e20}
+
+.tm-foot{grid-column:1 / -1;margin-top:6px;display:flex;align-items:center;gap:10px}
+.tm-undo{
+  font-size:14px;font-weight:600;padding:10px 14px;
+  border-radius:12px;border:1.5px solid var(--line);background:#fff;color:var(--muted);
+  min-height:44px;white-space:nowrap;flex:0 0 auto;
+}
+.tm-status{margin-left:auto;font-size:12px;color:var(--muted);white-space:nowrap}
+.tm-status.wait{color:var(--wait);font-weight:700}
+
+/* ---------- 出貨 ---------- */
+.tm-shipbox{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:14px;box-shadow:0 3px 10px rgba(0,0,0,.05)}
+.tm-shipbox h3{margin:0 0 4px;font-size:17px;font-weight:800}
+.tm-shipmeta{font-size:13px;color:var(--muted);font-variant-numeric:tabular-nums;margin:0 0 12px}
+.tm-bigmain{
+  width:100%;height:96px;font-size:26px;font-weight:800;letter-spacing:2px;
+  border:0;border-radius:16px;background:var(--brand);color:#fff;box-shadow:0 4px 0 var(--brand-dark);
+}
+.tm-bigmain:active{transform:translateY(3px);box-shadow:0 1px 0 var(--brand-dark)}
+.tm-bigmain.finish{background:var(--ok);box-shadow:0 4px 0 #1b5e20}
+.tm-bigmain.finish:active{box-shadow:0 1px 0 #1b5e20}
+
+/* ---------- 彈出面板 ---------- */
+.tm-modal{
+  position:fixed;inset:0;z-index:60;background:rgba(43,35,32,.45);
+  display:flex;align-items:flex-end;justify-content:center;
+}
+.tm-sheet{
+  width:100%;max-width:430px;max-height:88vh;overflow-y:auto;
+  background:var(--bg1);border-radius:20px 20px 0 0;
+  padding:16px 14px calc(20px + env(safe-area-inset-bottom));
+  box-shadow:0 -6px 24px rgba(0,0,0,.18);
+}
+.tm-sheet h2{margin:0 0 4px;font-size:18px;font-weight:800}
+.tm-sheet .hint{margin:0 0 14px;font-size:13px;line-height:1.6;color:var(--muted)}
+.tm-sheetfoot{display:flex;gap:10px;margin-top:16px}
+.tm-btn{
+  flex:1;font-size:16px;font-weight:700;min-height:52px;padding:12px;
+  border-radius:14px;border:1.5px solid var(--line);background:#fff;color:var(--ink);
+}
+.tm-btn.primary{background:var(--brand);border-color:var(--brand);color:#fff}
+.tm-btn.danger{color:#b3261e;border-color:#f0c6c2}
+.tm-btn[disabled]{opacity:.45}
+
+.tm-qtyrow{display:flex;align-items:center;gap:10px;margin-bottom:6px}
+.tm-qtyrow button{
+  flex:0 0 76px;height:76px;font-size:34px;font-weight:800;
+  border-radius:18px;border:1.5px solid var(--brand);background:#fff;color:var(--brand);
+}
+.tm-qtyrow .val{flex:1;text-align:center;font-size:38px;font-weight:800;font-variant-numeric:tabular-nums;background:none;border:0;color:var(--ink);padding:0;min-width:0}
+.tm-qtyrow .val .unit{font-size:16px;color:var(--muted);font-weight:600}
+.tm-fieldlabel{font-size:13px;font-weight:700;color:var(--muted);margin:16px 2px 6px}
+
+.tm-input{
+  width:100%;font-family:var(--font);font-size:17px;padding:12px 14px;min-height:50px;
+  border-radius:14px;border:1.5px solid var(--line);background:#fff;color:var(--ink);
+  -webkit-user-select:text;user-select:text;
+}
+.tm-chips{display:flex;flex-wrap:wrap;gap:8px}
+.tm-chips button{
+  font-size:15px;font-weight:700;padding:10px 16px;min-height:46px;
+  border-radius:999px;border:1.5px solid var(--line);background:#fff;color:var(--muted);
+}
+.tm-chips button[aria-pressed="true"]{background:var(--brand);border-color:var(--brand);color:#fff}
+
+.tm-list{list-style:none;margin:0;padding:0;display:grid;gap:8px}
+.tm-list li{
+  background:#fff;border:1px solid var(--line);border-radius:14px;padding:10px 12px;
+  display:flex;align-items:center;gap:8px;flex-wrap:wrap;
+}
+.tm-list .name{font-size:16px;font-weight:700;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tm-list .sub{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums;width:100%;line-height:1.5}
+.tm-list .ops{margin-left:auto;display:flex;gap:6px;flex:0 0 auto}
+.tm-list .ops button{
+  font-size:13px;font-weight:700;min-height:40px;padding:8px 12px;
+  border-radius:10px;border:1.5px solid var(--line);background:#fff;color:var(--muted);
+}
+.tm-list .ops button.danger{color:#b3261e;border-color:#f0c6c2}
+.tm-badge{font-size:12px;font-weight:700;padding:3px 8px;border-radius:999px;flex:0 0 auto}
+.tm-badge.wait{background:#fff5e0;color:var(--wait)}
+.tm-badge.ok{background:#eaf4ea;color:var(--ok)}
+.tm-badge.void{background:#eef0f1;color:var(--void)}
+
+.tm-toast{
+  position:fixed;left:50%;bottom:calc(24px + env(safe-area-inset-bottom));transform:translateX(-50%);
+  z-index:80;max-width:92vw;background:var(--shell);color:#fff;
+  font-size:14px;line-height:1.5;padding:12px 16px;border-radius:14px;
+  box-shadow:0 6px 20px rgba(0,0,0,.25);
+}
+.tm-foothint{margin:26px 2px 0;font-size:12px;line-height:1.7;color:var(--muted)}
+.tm-foothint button{
+  font-size:12px;font-weight:700;color:var(--muted);background:none;
+  border:0;border-bottom:1px dotted var(--muted);padding:2px 0;margin-right:12px;
+}
+
+/* 比 iPhone SE 還窄的機器：五個階段名擠成三四行會變一團糊，
+   這時只留時間，階段靠顏色分辨（做過的綠、現在的橘）。 */
+@media (max-width:359px){
+  .tm-card{grid-template-columns:1fr 112px}
+  .tm-step{font-size:0;padding:4px 1px}
+  .tm-step time{font-size:10px}
+}
+
+@media (prefers-reduced-motion: reduce){
+  .tm-main:active,.tm-bigmain:active{transform:none}
+}
+</style>
+</head>
+<body>
+
+<div class="tm-phone">
+  <header class="tm-topbar">
+    <span class="tm-brandmark">暮日計時</span>
+    <button class="tm-pending" id="pendingBtn" type="button"><i></i><span id="pendingText">待確認 0 筆</span></button>
+    <button class="tm-sync" id="syncBtn" type="button">立即同步</button>
+  </header>
+
+  <div class="tm-offline" id="offlineBar" hidden>目前沒有網路。按下的時間都存在手機裡，連上網路會自動補送。</div>
+
+  <div class="tm-tabs">
+    <button id="tabProd" type="button" aria-pressed="true">生產</button>
+    <button id="tabShip" type="button" aria-pressed="false">出貨</button>
+  </div>
+
+  <main id="viewProd">
+    <div class="tm-sectitle">點一下品項，開一張新的計時卡</div>
+    <div class="tm-items" id="itemBar"></div>
+    <div class="tm-sectitle" id="cardsTitle">進行中（0）</div>
+    <div class="tm-cards" id="cards"></div>
+    <p class="tm-empty" id="cardsEmpty">還沒有進行中的卡片。點上面的品項開一張。</p>
+  </main>
+
+  <main id="viewShip" hidden>
+    <div class="tm-sectitle">出貨計時</div>
+    <div class="tm-shipbox" id="shipBox"></div>
+  </main>
+
+  <p class="tm-foothint">
+    <button id="itemsBtn" type="button">品項管理</button>
+    <button id="settingsBtn" type="button">設定與還原</button>
+  </p>
+</div>
+
+<div class="tm-modal" id="modal" hidden><div class="tm-sheet" id="sheet" role="dialog" aria-modal="true"></div></div>
+
+<script>
+'use strict';
+(function () {
+
+/* =========================================================================
+   暮日甜點｜施作工時計時頁
+   規格來源：_context/projects/project_moodri_timer.md
+   後端契約：moodri-timer-gas（doPost 寫入 / doGet JSONP 唯讀查核）
+
+   三個非做不可的行為，程式裡到處都在遷就它們，改的時候要記得為什麼：
+   1. 多卡片並行 —— 一邊烤費南雪、一邊揉下一爐，只能記一件事的計時器等於沒用
+   2. 跨日保留   —— 今天揉麵、隔天烤，卡片一律寫 localStorage，開頁再還原
+   3. 離線不掉資料 —— 每筆先寫本機再送出，送出後一律先標「待確認」
+   ========================================================================= */
+
+/* ---- 設定 ---------------------------------------------------------- */
+
+// 正式部署的 Web App 網址。端點是公開可寫入的，這點是已拍板接受的風險
+//（理由見規格「安全條款」節）。硬性禁令：不得沿用於訂單、客戶或金額資料。
+var DEFAULT_ENDPOINT = 'https://script.google.com/macros/s/AKfycbzeRMMaHqHoCngMgKJBt0tYHf-cui_1PYWxne8MeFbBngOfM3Wn36y-lVj8tGIzSdpL/exec';
+
+var LIMITS = { batch: 50, itemsBatch: 300, query: 200, maxQty: 5000, maxOrderCount: 5000, maxBoxCount: 20000, text: 200 };
+var STAGES = ['開始做', '進烤箱', '出爐', '開始包裝', '包裝完'];
+var TIME_KEYS = ['start', 'ovenIn', 'ovenOut', 'packStart', 'packEnd'];
+var STAGE_STATUS = ['尚未開始', '製作中', '烤箱中', '冷卻中', '包裝中', '待填數量'];
+var CHANNELS = ['團購', '自售'];
+var UNIT_PRESETS = ['盒', '顆', '盤', '片', '條'];
+
+var K = {
+  items: 'moodri.timer.items.v1',
+  cards: 'moodri.timer.cards.v1',
+  ship: 'moodri.timer.ship.v1',
+  queue: 'moodri.timer.queue.v1',
+  endpoint: 'moodri.timer.endpoint.v1',
+  lastQty: 'moodri.timer.lastqty.v1'
+};
+
+// 已查核成功的紀錄留這麼多天再清掉。留著是為了「按錯了要作廢」還找得到那一筆
+var KEEP_CONFIRMED_DAYS = 14;
+
+/* ---- 小工具 -------------------------------------------------------- */
+
+function load(key, fallback) {
+  try {
+    var raw = localStorage.getItem(key);
+    if (raw === null || raw === undefined) return fallback;
+    var v = JSON.parse(raw);
+    return (v === null || v === undefined) ? fallback : v;
+  } catch (e) { return fallback; }
+}
+function save(key, val) {
+  try { localStorage.setItem(key, JSON.stringify(val)); return true; }
+  catch (e) { toast('手機存不進去（空間可能滿了），先別關掉這頁'); return false; }
+}
+
+function uuid() {
+  try { if (window.crypto && crypto.randomUUID) return crypto.randomUUID(); } catch (e) {}
+  var b = new Uint8Array(16);
+  if (window.crypto && crypto.getRandomValues) crypto.getRandomValues(b);
+  else for (var i = 0; i < 16; i++) b[i] = Math.floor(Math.random() * 256);
+  b[6] = (b[6] & 0x0f) | 0x40;
+  b[8] = (b[8] & 0x3f) | 0x80;
+  var h = [];
+  for (var j = 0; j < 16; j++) h.push((b[j] + 0x100).toString(16).slice(1));
+  return h.slice(0, 4).join('') + '-' + h.slice(4, 6).join('') + '-' + h.slice(6, 8).join('') +
+         '-' + h.slice(8, 10).join('') + '-' + h.slice(10, 16).join('');
+}
+
+function pad(n) { return (n < 10 ? '0' : '') + n; }
+
+/**
+ * 輸出帶時區的 ISO 字串。後端用 Date.parse 收，再換算成台北日期，
+ * 所以這裡帶「這支手機當下的實際時區」是正確的絕對時間；手機在台灣就等於 +08:00。
+ */
+function isoLocal(d) {
+  var off = -d.getTimezoneOffset();
+  var sign = off < 0 ? '-' : '+';
+  var abs = Math.abs(off);
+  return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) +
+    'T' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds()) +
+    sign + pad(Math.floor(abs / 60)) + ':' + pad(abs % 60);
+}
+function localDateKey(d) { return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()); }
+function fmtClock(iso) {
+  if (!iso) return '—';
+  var d = new Date(iso);
+  if (isNaN(d.getTime())) return '—';
+  return pad(d.getHours()) + ':' + pad(d.getMinutes());
+}
+function fmtSpan(ms) {
+  if (!(ms >= 0)) return '';
+  var m = Math.floor(ms / 60000);
+  if (m < 60) return '已 ' + m + ' 分';
+  return '已 ' + Math.floor(m / 60) + ' 小時 ' + (m % 60) + ' 分';
+}
+function esc(s) {
+  return String(s === null || s === undefined ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+function clamp(n, lo, hi) { return Math.min(hi, Math.max(lo, n)); }
+function trimText(s) { return String(s === null || s === undefined ? '' : s).trim().slice(0, LIMITS.text); }
+
+var toastTimer = null;
+function toast(msg) {
+  var el = document.getElementById('tmToast');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'tmToast';
+    el.className = 'tm-toast';
+    document.body.appendChild(el);
+  }
+  el.textContent = msg;
+  el.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(function () { el.hidden = true; }, 3200);
+}
+
+/* ---- 狀態 ---------------------------------------------------------- */
+
+var S = {
+  items: load(K.items, []),
+  cards: load(K.cards, []),
+  ship: load(K.ship, null),
+  queue: load(K.queue, []),
+  endpoint: load(K.endpoint, '') || DEFAULT_ENDPOINT,
+  lastQty: load(K.lastQty, {}),
+  tab: 'prod'
+};
+
+function saveItems() { save(K.items, S.items); }
+function saveCards() { save(K.cards, S.cards); }
+function saveShip() { save(K.ship, S.ship); }
+function saveQueue() { save(K.queue, S.queue); }
+
+function liveItems() {
+  return S.items.filter(function (it) { return !it.deleted; })
+    .sort(function (a, b) { return (a.order || 0) - (b.order || 0); });
+}
+function findItem(itemUuid) {
+  for (var i = 0; i < S.items.length; i++) if (S.items[i].itemUuid === itemUuid) return S.items[i];
+  return null;
+}
+function pendingRecords() {
+  return S.queue.filter(function (q) { return q.type !== 'items' && q.state === 'pending'; });
+}
+
+/* ---- 佇列（送出前一律先進這裡） ------------------------------------ */
+
+/**
+ * 進佇列。同一個 uuid 只留一筆：更正就是「同 UUID + 較大的修訂序號」，
+ * 舊的那筆留著只會讓補送時把舊值又推上去一次。
+ */
+function enqueue(type, record, label) {
+  var key = type === 'items' ? record.itemUuid : record.uuid;
+  var idx = -1;
+  for (var i = 0; i < S.queue.length; i++) {
+    if (S.queue[i].type === type && S.queue[i].key === key) { idx = i; break; }
+  }
+  var entry = {
+    qid: idx >= 0 ? S.queue[idx].qid : uuid(),
+    type: type,
+    key: key,
+    rev: type === 'items' ? 0 : record.rev,
+    state: 'pending',
+    label: label || (idx >= 0 ? S.queue[idx].label : ''),
+    createdAt: idx >= 0 ? S.queue[idx].createdAt : isoLocal(new Date()),
+    updatedAt: isoLocal(new Date()),
+    data: record
+  };
+  if (idx >= 0) S.queue[idx] = entry; else S.queue.push(entry);
+  saveQueue();
+  return entry;
+}
+
+function pruneQueue() {
+  var cutoff = Date.now() - KEEP_CONFIRMED_DAYS * 86400000;
+  var before = S.queue.length;
+  S.queue = S.queue.filter(function (q) {
+    if (q.state !== 'confirmed') return true;
+    var t = Date.parse(q.updatedAt || q.createdAt || '');
+    return isNaN(t) ? true : t >= cutoff;
+  });
+  if (S.queue.length !== before) saveQueue();
+}
+
+/* ---- 送出與查核 ---------------------------------------------------- */
+
+var syncing = false;
+
+function post(type, records) {
+  // no-cors：讀不到回應，所以「送出成功」只代表送出去了，不代表寫進試算表。
+  // 真正算數的是後面 JSONP 查核那一步。
+  return fetch(S.endpoint, {
+    method: 'POST',
+    mode: 'no-cors',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify({ type: type, records: records })
+  });
+}
+
+var jsonpSeq = 0;
+function jsonp(params, timeoutMs) {
+  return new Promise(function (resolve, reject) {
+    var name = 'moodriTimerCb' + (++jsonpSeq) + '_' + Math.floor(Math.random() * 1e6);
+    var script = document.createElement('script');
+    var done = false;
+    var timer = setTimeout(function () { finish(new Error('查核逾時')); }, timeoutMs || 20000);
+
+    function finish(err, data) {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      try { delete window[name]; } catch (e) { window[name] = undefined; }
+      if (script.parentNode) script.parentNode.removeChild(script);
+      if (err) reject(err); else resolve(data);
+    }
+    window[name] = function (data) { finish(null, data); };
+    script.onerror = function () { finish(new Error('查核連線失敗')); };
+
+    var qs = ['callback=' + encodeURIComponent(name)];
+    for (var k in params) {
+      if (Object.prototype.hasOwnProperty.call(params, k)) qs.push(k + '=' + encodeURIComponent(params[k]));
+    }
+    script.src = S.endpoint + '?' + qs.join('&');
+    document.head.appendChild(script);
+  });
+}
+
+function chunk(arr, size) {
+  var out = [];
+  for (var i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
+}
+
+/**
+ * 送出佇列裡所有待送的東西，然後查核。
+ * silent=true 時不跳提示（自動同步用），使用者按「立即同步」才報結果。
+ */
+function sync(silent) {
+  if (syncing) return Promise.resolve();
+  var outbox = S.queue.filter(function (q) { return q.state === 'pending'; });
+  var toCheck = pendingRecords();
+  if (outbox.length === 0 && toCheck.length === 0) {
+    if (!silent) toast('沒有待處理的紀錄');
+    return Promise.resolve();
+  }
+  if (!navigator.onLine) {
+    if (!silent) toast('目前離線。資料都在手機裡，連上網路會自動補送');
+    return Promise.resolve();
+  }
+
+  syncing = true;
+  render();
+
+  var byType = { production: [], shipping: [], items: [] };
+  outbox.forEach(function (q) { if (byType[q.type]) byType[q.type].push(q); });
+
+  var jobs = [];
+  ['production', 'shipping', 'items'].forEach(function (type) {
+    var size = type === 'items' ? LIMITS.itemsBatch : LIMITS.batch;
+    chunk(byType[type], size).forEach(function (group) { jobs.push({ type: type, group: group }); });
+  });
+
+  var sentOk = 0;
+  var failed = 0;
+
+  var chain = jobs.reduce(function (p, job) {
+    return p.then(function () {
+      return post(job.type, job.group.map(function (q) { return q.data; })).then(function () {
+        sentOk += job.group.length;
+        job.group.forEach(function (q) {
+          if (q.type === 'items') {
+            // 品項備份是單向備份，後端也沒有查核管道（JSONP 只查生產／出貨的 UUID），
+            // 所以送出去就算數，不留在佇列裡。
+            q.state = 'sent';
+          }
+          q.sentAt = isoLocal(new Date());
+        });
+      }).catch(function () { failed += job.group.length; });
+    });
+  }, Promise.resolve());
+
+  return chain.then(function () {
+    S.queue = S.queue.filter(function (q) { return q.state !== 'sent'; });
+    saveQueue();
+    return check(true);
+  }).then(function (res) {
+    syncing = false;
+    render();
+    if (!silent) {
+      if (failed > 0) toast('送出 ' + sentOk + ' 筆，' + failed + ' 筆沒送成功，稍後會再試');
+      else if (res && res.confirmed > 0) toast('已同步 ' + res.confirmed + ' 筆，還有 ' + pendingRecords().length + ' 筆待確認');
+      else toast('已送出。還有 ' + pendingRecords().length + ' 筆待確認');
+    }
+  }).catch(function (err) {
+    syncing = false;
+    render();
+    if (!silent) toast('同步沒完成：' + (err && err.message ? err.message : '未知錯誤'));
+  });
+}
+
+/**
+ * 查核。把本機「待確認」的 UUID 交給後端，後端只回其中確實存在的那些。
+ * 不是抓「最近 N 筆」——佇列較多或補送時那種做法會漏判。
+ */
+function check(silent) {
+  var list = pendingRecords();
+  if (list.length === 0) return Promise.resolve({ confirmed: 0 });
+  if (!navigator.onLine) return Promise.resolve({ confirmed: 0 });
+
+  var groups = chunk(list, LIMITS.query);
+  var confirmed = 0;
+
+  return groups.reduce(function (p, group) {
+    return p.then(function () {
+      return jsonp({ uuids: group.map(function (q) { return q.key; }).join(',') }).then(function (res) {
+        if (!res || !res.ok || !Array.isArray(res.found)) return;
+        var map = {};
+        res.found.forEach(function (f) { map[f.uuid] = Number(f.rev); });
+        group.forEach(function (q) {
+          var rev = map[q.key];
+          // 只有「試算表上的修訂序號 >= 我送出的」才算數。
+          // 送了新版本但後端還停在舊版本，代表這次覆寫沒吃到，要留著再送。
+          if (rev !== undefined && !isNaN(rev) && rev >= q.rev) {
+            q.state = 'confirmed';
+            q.updatedAt = isoLocal(new Date());
+            confirmed++;
+          }
+        });
+      });
+    });
+  }, Promise.resolve()).then(function () {
+    if (confirmed > 0) saveQueue();
+    if (!silent && confirmed === 0) toast('查核完成，還沒有新的一筆寫進試算表');
+    return { confirmed: confirmed };
+  });
+}
+
+/* ---- 生產：狀態機 -------------------------------------------------- */
+
+function nextBatchNote(itemUuid) {
+  // 自動編「第 N 爐」。廚房裡手是髒的，能不打字就不打字；要改再進更正面板改。
+  var today = localDateKey(new Date());
+  var n = 0;
+  S.cards.forEach(function (c) {
+    if (c.itemUuid === itemUuid && c.createdDate === today) n++;
+  });
+  S.queue.forEach(function (q) {
+    if (q.type === 'production' && q.data && q.data.itemUuid === itemUuid && q.data.date === today) n++;
+  });
+  return '第' + (n + 1) + '爐';
+}
+
+function addCard(itemUuid) {
+  var item = findItem(itemUuid);
+  if (!item) return;
+  var card = {
+    id: uuid(),
+    itemUuid: item.itemUuid,
+    itemName: item.name,     // 名稱快照：之後改名，這張卡與寫出去的紀錄都不跟著變
+    unit: item.unit || '',
+    batchNote: nextBatchNote(item.itemUuid),
+    createdDate: localDateKey(new Date()),
+    stage: 0,
+    times: {},
+    note: ''
+  };
+  S.cards.push(card);
+  saveCards();
+  render();
+}
+
+function findCard(id) {
+  for (var i = 0; i < S.cards.length; i++) if (S.cards[i].id === id) return S.cards[i];
+  return null;
+}
+
+function advance(id) {
+  var c = findCard(id);
+  if (!c) return;
+  if (c.stage >= TIME_KEYS.length) { openQty(c.id); return; }
+  var now = new Date();
+  var prevKey = c.stage > 0 ? TIME_KEYS[c.stage - 1] : null;
+  if (prevKey && c.times[prevKey] && new Date(c.times[prevKey]).getTime() > now.getTime()) {
+    // 手機時間被改過（或使用者調了系統時間）才會走到這。允許相等，但不允許倒退
+    toast('手機時間比上一步還早，這一步先不記');
+    return;
+  }
+  c.times[TIME_KEYS[c.stage]] = isoLocal(now);
+  c.stage++;
+  saveCards();
+  render();
+  if (c.stage >= TIME_KEYS.length) openQty(c.id);
+}
+
+function undo(id) {
+  var c = findCard(id);
+  if (!c) return;
+  if (c.stage === 0) {
+    if (!window.confirm('這張「' + c.itemName + '」還沒開始，要刪掉嗎？')) return;
+    S.cards = S.cards.filter(function (x) { return x.id !== id; });
+    saveCards();
+    render();
+    return;
+  }
+  c.stage--;
+  delete c.times[TIME_KEYS[c.stage]];
+  saveCards();
+  render();
+}
+
+/* ---- 生產：數量輸入與送出 ------------------------------------------ */
+
+var qtyState = null;
+
+function openQty(cardId) {
+  var c = findCard(cardId);
+  if (!c) return;
+  var last = S.lastQty[c.itemUuid];
+  qtyState = { cardId: cardId, qty: (typeof last === 'number' && last > 0) ? last : 1, note: c.note || '' };
+  renderQtySheet();
+}
+
+function renderQtySheet() {
+  var c = findCard(qtyState.cardId);
+  if (!c) { closeSheet(); return; }
+  var unit = c.unit || '';
+  sheetHtml(
+    '<h2>' + esc(c.itemName) + ' 做好了</h2>' +
+    '<p class="hint">' + esc(c.batchNote) + '｜' + fmtClock(c.times.start) + ' 開始，' + fmtClock(c.times.packEnd) + ' 包完。做出幾' + esc(unit || '份') + '？</p>' +
+    '<div class="tm-qtyrow">' +
+      '<button type="button" data-act="qty-" aria-label="減一">−</button>' +
+      '<input class="val" id="qtyVal" type="number" inputmode="numeric" min="0" max="' + LIMITS.maxQty + '" value="' + qtyState.qty + '">' +
+      '<button type="button" data-act="qty+" aria-label="加一">＋</button>' +
+    '</div>' +
+    '<div class="tm-chips" style="justify-content:center">' +
+      '<button type="button" data-act="qty-10">−10</button>' +
+      '<button type="button" data-act="qty+10">＋10</button>' +
+      (unit ? '<span style="align-self:center;font-size:15px;color:var(--muted);font-weight:700">單位：' + esc(unit) + '</span>' : '') +
+    '</div>' +
+    '<div class="tm-fieldlabel">備註（可留空）</div>' +
+    '<input class="tm-input" id="qtyNote" type="text" maxlength="' + LIMITS.text + '" value="' + esc(qtyState.note) + '" placeholder="例：外皮偏深，下爐降 10 度">' +
+    '<div class="tm-sheetfoot">' +
+      '<button class="tm-btn" type="button" data-act="qty-back">↩ 回上一步</button>' +
+      '<button class="tm-btn primary" type="button" data-act="qty-ok">完成，記下來</button>' +
+    '</div>'
+  );
+}
+
+function bumpQty(delta) {
+  var input = document.getElementById('qtyVal');
+  var cur = input ? Number(input.value) : qtyState.qty;
+  if (isNaN(cur)) cur = 0;
+  qtyState.qty = clamp(Math.round(cur + delta), 0, LIMITS.maxQty);
+  if (input) input.value = qtyState.qty;
+}
+
+function buildProduction(card, qty, note, rev, status) {
+  return {
+    uuid: card.recordUuid || uuid(),
+    itemUuid: card.itemUuid,
+    itemName: card.itemName,
+    batchNote: card.batchNote || '',
+    start: card.times.start,
+    ovenIn: card.times.ovenIn,
+    ovenOut: card.times.ovenOut,
+    packStart: card.times.packStart,
+    packEnd: card.times.packEnd,
+    qty: qty,
+    unit: card.unit || '',
+    note: note || '',
+    status: status || '正常',
+    rev: rev || 0,
+    date: localDateKey(new Date(card.times.start))   // 本機自用（自動編爐號、面板分組），後端會自己重算
+  };
+}
+
+function commitQty() {
+  var c = findCard(qtyState.cardId);
+  if (!c) { closeSheet(); return; }
+  var input = document.getElementById('qtyVal');
+  var qty = input ? Math.round(Number(input.value)) : qtyState.qty;
+  if (isNaN(qty) || qty < 0 || qty > LIMITS.maxQty) { toast('數量要在 0～' + LIMITS.maxQty + ' 之間'); return; }
+  var noteEl = document.getElementById('qtyNote');
+  var note = trimText(noteEl ? noteEl.value : '');
+
+  var rec = buildProduction(c, qty, note, 0, '正常');
+  enqueue('production', rec, c.itemName + '｜' + (c.batchNote || ''));
+  S.lastQty[c.itemUuid] = qty;
+  save(K.lastQty, S.lastQty);
+  S.cards = S.cards.filter(function (x) { return x.id !== c.id; });
+  saveCards();
+  closeSheet();
+  render();
+  toast('已記下 ' + c.itemName + ' ' + qty + (c.unit || '') + '，待確認');
+  sync(true);
+}
+
+/* ---- 出貨 ---------------------------------------------------------- */
+
+function startShip() {
+  S.ship = { id: uuid(), start: isoLocal(new Date()) };
+  saveShip();
+  render();
+}
+function undoShip() {
+  if (!S.ship) return;
+  if (!window.confirm('要取消這次出貨計時嗎？（已按的開始時間會消失）')) return;
+  S.ship = null;
+  saveShip();
+  render();
+}
+var shipState = null;
+function endShip() {
+  if (!S.ship) return;
+  var end = isoLocal(new Date());
+  if (new Date(end).getTime() < new Date(S.ship.start).getTime()) { toast('結束時間比開始還早，先確認手機時間'); return; }
+  shipState = { start: S.ship.start, end: end, channel: '', orderCount: 1, boxCount: 1, note: '' };
+  renderShipSheet();
+}
+
+function renderShipSheet() {
+  var mins = Math.round((new Date(shipState.end) - new Date(shipState.start)) / 60000);
+  sheetHtml(
+    '<h2>這趟出貨做完了</h2>' +
+    '<p class="hint">' + fmtClock(shipState.start) + ' → ' + fmtClock(shipState.end) + '，共 ' + mins + ' 分鐘。</p>' +
+    '<div class="tm-fieldlabel">通路</div>' +
+    '<div class="tm-chips">' + CHANNELS.map(function (ch) {
+      return '<button type="button" data-act="ship-ch" data-ch="' + esc(ch) + '" aria-pressed="' + (shipState.channel === ch) + '">' + esc(ch) + '</button>';
+    }).join('') + '</div>' +
+    '<div class="tm-fieldlabel">訂單筆數</div>' +
+    '<div class="tm-qtyrow">' +
+      '<button type="button" data-act="ord-" aria-label="訂單筆數減一">−</button>' +
+      '<input class="val" id="ordVal" type="number" inputmode="numeric" min="0" max="' + LIMITS.maxOrderCount + '" value="' + shipState.orderCount + '">' +
+      '<button type="button" data-act="ord+" aria-label="訂單筆數加一">＋</button>' +
+    '</div>' +
+    '<div class="tm-fieldlabel">總盒數</div>' +
+    '<div class="tm-qtyrow">' +
+      '<button type="button" data-act="box-" aria-label="總盒數減一">−</button>' +
+      '<input class="val" id="boxVal" type="number" inputmode="numeric" min="0" max="' + LIMITS.maxBoxCount + '" value="' + shipState.boxCount + '">' +
+      '<button type="button" data-act="box+" aria-label="總盒數加一">＋</button>' +
+    '</div>' +
+    '<div class="tm-fieldlabel">備註（可留空）</div>' +
+    '<input class="tm-input" id="shipNote" type="text" maxlength="' + LIMITS.text + '" value="' + esc(shipState.note) + '">' +
+    '<div class="tm-sheetfoot">' +
+      '<button class="tm-btn" type="button" data-act="ship-cancel">↩ 還沒好，回去</button>' +
+      '<button class="tm-btn primary" type="button" data-act="ship-ok">完成，記下來</button>' +
+    '</div>'
+  );
+}
+
+function commitShip() {
+  if (CHANNELS.indexOf(shipState.channel) === -1) { toast('先選通路：團購或自售'); return; }
+  var ord = Math.round(Number(document.getElementById('ordVal').value));
+  var box = Math.round(Number(document.getElementById('boxVal').value));
+  if (isNaN(ord) || ord < 0 || ord > LIMITS.maxOrderCount) { toast('訂單筆數要在 0～' + LIMITS.maxOrderCount + ' 之間'); return; }
+  if (isNaN(box) || box < 0 || box > LIMITS.maxBoxCount) { toast('總盒數要在 0～' + LIMITS.maxBoxCount + ' 之間'); return; }
+  var note = trimText(document.getElementById('shipNote').value);
+
+  var rec = {
+    uuid: uuid(),
+    channel: shipState.channel,
+    start: shipState.start,
+    end: shipState.end,
+    orderCount: ord,
+    boxCount: box,
+    note: note,
+    status: '正常',
+    rev: 0,
+    date: localDateKey(new Date(shipState.start))
+  };
+  enqueue('shipping', rec, '出貨｜' + shipState.channel + ' ' + ord + ' 筆');
+  S.ship = null;
+  saveShip();
+  shipState = null;
+  closeSheet();
+  render();
+  toast('出貨已記下，待確認');
+  sync(true);
+}
+
+/* ---- 品項管理 ------------------------------------------------------ */
+
+var itemDraft = { name: '', unit: '盒' };
+
+function openItems() {
+  itemDraft = { name: '', unit: '盒' };
+  renderItemsSheet();
+}
+
+function renderItemsSheet() {
+  var list = liveItems();
+  var rows = list.map(function (it, i) {
+    return '<li>' +
+      '<span class="name">' + esc(it.name) + '</span>' +
+      '<span class="tm-badge void">' + esc(it.unit || '未設單位') + '</span>' +
+      '<span class="ops">' +
+        '<button type="button" data-act="item-up" data-id="' + esc(it.itemUuid) + '"' + (i === 0 ? ' disabled' : '') + '>↑</button>' +
+        '<button type="button" data-act="item-down" data-id="' + esc(it.itemUuid) + '"' + (i === list.length - 1 ? ' disabled' : '') + '>↓</button>' +
+        '<button type="button" data-act="item-rename" data-id="' + esc(it.itemUuid) + '">改名</button>' +
+        '<button type="button" data-act="item-del" data-id="' + esc(it.itemUuid) + '" class="danger">刪除</button>' +
+      '</span></li>';
+  }).join('');
+
+  sheetHtml(
+    '<h2>品項管理</h2>' +
+    '<p class="hint">改名不會換品項編號，舊紀錄留的是當時的名稱快照，不會跟著變。</p>' +
+    (rows ? '<ul class="tm-list">' + rows + '</ul>' : '<p class="tm-empty">還沒有品項。在下面新增第一個。</p>') +
+    '<div class="tm-fieldlabel">新增品項</div>' +
+    '<input class="tm-input" id="newItemName" type="text" maxlength="' + LIMITS.text + '" placeholder="品項名稱，例：費南雪" value="' + esc(itemDraft.name) + '">' +
+    '<div class="tm-fieldlabel">預設單位</div>' +
+    '<div class="tm-chips">' + UNIT_PRESETS.map(function (u) {
+      return '<button type="button" data-act="unit" data-u="' + esc(u) + '" aria-pressed="' + (itemDraft.unit === u) + '">' + esc(u) + '</button>';
+    }).join('') + '</div>' +
+    '<div class="tm-sheetfoot">' +
+      '<button class="tm-btn" type="button" data-act="close">關閉</button>' +
+      '<button class="tm-btn primary" type="button" data-act="item-add">＋ 新增</button>' +
+    '</div>'
+  );
+}
+
+function syncItem(it) {
+  enqueue('items', {
+    itemUuid: it.itemUuid,
+    name: it.name,
+    unit: it.unit || '',
+    order: it.order || 0,
+    deleted: !!it.deleted,
+    updatedAt: isoLocal(new Date())
+  }, '品項｜' + it.name);
+}
+
+function addItem() {
+  var el = document.getElementById('newItemName');
+  var name = trimText(el ? el.value : '');
+  if (!name) { toast('先輸入品項名稱'); return; }
+  var dup = liveItems().some(function (x) { return x.name === name; });
+  if (dup && !window.confirm('已經有一個叫「' + name + '」的品項，還是要再加一個嗎？')) return;
+  var maxOrder = S.items.reduce(function (m, x) { return Math.max(m, x.order || 0); }, 0);
+  var it = { itemUuid: uuid(), name: name, unit: itemDraft.unit, order: maxOrder + 1, deleted: false };
+  S.items.push(it);
+  saveItems();
+  syncItem(it);
+  itemDraft.name = '';
+  renderItemsSheet();
+  render();
+  sync(true);
+}
+
+function renameItem(id) {
+  var it = findItem(id);
+  if (!it) return;
+  var name = trimText(window.prompt('新的名稱', it.name) || '');
+  if (!name || name === it.name) return;
+  it.name = name;
+  saveItems();
+  syncItem(it);
+  renderItemsSheet();
+  render();
+  sync(true);
+}
+
+function deleteItem(id) {
+  var it = findItem(id);
+  if (!it) return;
+  var inUse = S.cards.some(function (c) { return c.itemUuid === id; });
+  var msg = inUse
+    ? '「' + it.name + '」還有進行中的卡片。刪掉品項不會影響那些卡片，確定刪嗎？'
+    : '確定刪掉「' + it.name + '」？舊紀錄不受影響。';
+  if (!window.confirm(msg)) return;
+  it.deleted = true;
+  saveItems();
+  syncItem(it);
+  renderItemsSheet();
+  render();
+  sync(true);
+}
+
+function moveItem(id, dir) {
+  var list = liveItems();
+  var i = -1;
+  for (var k = 0; k < list.length; k++) if (list[k].itemUuid === id) { i = k; break; }
+  var j = i + dir;
+  if (i < 0 || j < 0 || j >= list.length) return;
+  var a = list[i], b = list[j];
+  var tmp = a.order; a.order = b.order; b.order = tmp;
+  saveItems();
+  syncItem(a);
+  syncItem(b);
+  renderItemsSheet();
+  render();
+  sync(true);
+}
+
+/* ---- 待確認清單與更正流程 ------------------------------------------ */
+
+function openQueue() {
+  renderQueueSheet();
+}
+
+function queueRowHtml(q) {
+  var badge = q.state === 'confirmed'
+    ? '<span class="tm-badge ok">已同步</span>'
+    : '<span class="tm-badge wait">待確認</span>';
+  var voided = q.data && q.data.status === '已作廢';
+  if (voided) badge += ' <span class="tm-badge void">已作廢</span>';
+
+  var sub;
+  if (q.type === 'production') {
+    sub = fmtClock(q.data.start) + '→' + fmtClock(q.data.packEnd) + '｜' + q.data.qty + (q.data.unit || '') +
+      '｜人力 ' + laborMin(q.data) + ' 分、冷卻 ' + coolMin(q.data) + ' 分';
+  } else {
+    var mins = Math.round((new Date(q.data.end) - new Date(q.data.start)) / 60000);
+    sub = fmtClock(q.data.start) + '→' + fmtClock(q.data.end) + '｜' + mins + ' 分｜' +
+      q.data.orderCount + ' 筆 / ' + q.data.boxCount + ' 盒';
+  }
+
+  var ops = '';
+  if (!voided) {
+    if (q.state === 'pending') {
+      ops += '<button type="button" data-act="q-edit" data-qid="' + esc(q.qid) + '">修改</button>';
+    }
+    ops += '<button type="button" data-act="q-void" data-qid="' + esc(q.qid) + '" class="danger">作廢</button>';
+  }
+
+  return '<li>' +
+    '<span class="name">' + esc(q.label || (q.type === 'production' ? '生產' : '出貨')) + '</span>' + badge +
+    '<span class="ops">' + ops + '</span>' +
+    '<span class="sub">' + esc(sub) + '（修訂 ' + q.rev + '）</span>' +
+    '</li>';
+}
+
+function laborMin(d) {
+  var a = (new Date(d.ovenIn) - new Date(d.start)) / 60000;
+  var b = (new Date(d.packEnd) - new Date(d.packStart)) / 60000;
+  return Math.round((a + b) * 10) / 10;
+}
+function coolMin(d) {
+  return Math.round(((new Date(d.packStart) - new Date(d.ovenOut)) / 60000) * 10) / 10;
+}
+
+function renderQueueSheet() {
+  var recs = S.queue.filter(function (q) { return q.type !== 'items'; })
+    .sort(function (a, b) { return String(b.createdAt).localeCompare(String(a.createdAt)); });
+  var pending = recs.filter(function (q) { return q.state === 'pending'; });
+  var confirmed = recs.filter(function (q) { return q.state === 'confirmed'; });
+
+  sheetHtml(
+    '<h2>紀錄與更正</h2>' +
+    '<p class="hint">送出後一律先標「待確認」，要等查核到試算表真的有那一列，才會翻成「已同步」。' +
+    '已同步的不能直接改值，只能作廢再補一筆——否則你以為改了，試算表其實沒動。</p>' +
+    '<div class="tm-fieldlabel">待確認（' + pending.length + '）</div>' +
+    (pending.length ? '<ul class="tm-list">' + pending.map(queueRowHtml).join('') + '</ul>' : '<p class="tm-empty">沒有待確認的紀錄。</p>') +
+    '<div class="tm-fieldlabel">已同步（近 ' + KEEP_CONFIRMED_DAYS + ' 天，' + confirmed.length + '）</div>' +
+    (confirmed.length ? '<ul class="tm-list">' + confirmed.map(queueRowHtml).join('') + '</ul>' : '<p class="tm-empty">還沒有查核成功的紀錄。</p>') +
+    '<div class="tm-sheetfoot">' +
+      '<button class="tm-btn" type="button" data-act="close">關閉</button>' +
+      '<button class="tm-btn primary" type="button" data-act="q-sync">立即同步</button>' +
+    '</div>'
+  );
+}
+
+function findQ(qid) {
+  for (var i = 0; i < S.queue.length; i++) if (S.queue[i].qid === qid) return S.queue[i];
+  return null;
+}
+
+var editState = null;
+
+function openEdit(qid) {
+  var q = findQ(qid);
+  if (!q) return;
+  if (q.state !== 'pending') { toast('已同步的紀錄不能直接改，請用「作廢」再補一筆'); return; }
+  editState = { qid: qid };
+  renderEditSheet();
+}
+
+function renderEditSheet() {
+  var q = findQ(editState.qid);
+  if (!q) { closeSheet(); return; }
+  var d = q.data;
+  var body;
+  if (q.type === 'production') {
+    body =
+      '<div class="tm-fieldlabel">產出數量（' + esc(d.unit || '份') + '）</div>' +
+      '<input class="tm-input" id="edQty" type="number" inputmode="numeric" min="0" max="' + LIMITS.maxQty + '" value="' + d.qty + '">' +
+      '<div class="tm-fieldlabel">批次備註</div>' +
+      '<input class="tm-input" id="edBatch" type="text" maxlength="' + LIMITS.text + '" value="' + esc(d.batchNote || '') + '">';
+  } else {
+    body =
+      '<div class="tm-fieldlabel">訂單筆數</div>' +
+      '<input class="tm-input" id="edOrd" type="number" inputmode="numeric" min="0" max="' + LIMITS.maxOrderCount + '" value="' + d.orderCount + '">' +
+      '<div class="tm-fieldlabel">總盒數</div>' +
+      '<input class="tm-input" id="edBox" type="number" inputmode="numeric" min="0" max="' + LIMITS.maxBoxCount + '" value="' + d.boxCount + '">';
+  }
+  sheetHtml(
+    '<h2>修改待確認的紀錄</h2>' +
+    '<p class="hint">' + esc(q.label) + '｜同一筆重送，修訂序號會從 ' + q.rev + ' 變成 ' + (q.rev + 1) + '。時間點不開放修改，要改時間請作廢後重記一次。</p>' +
+    body +
+    '<div class="tm-fieldlabel">備註</div>' +
+    '<input class="tm-input" id="edNote" type="text" maxlength="' + LIMITS.text + '" value="' + esc(d.note || '') + '">' +
+    '<div class="tm-sheetfoot">' +
+      '<button class="tm-btn" type="button" data-act="q-back">↩ 回列表</button>' +
+      '<button class="tm-btn primary" type="button" data-act="q-save">存起來重送</button>' +
+    '</div>'
+  );
+}
+
+function commitEdit() {
+  var q = findQ(editState.qid);
+  if (!q) { closeSheet(); return; }
+  var d = JSON.parse(JSON.stringify(q.data));
+  if (q.type === 'production') {
+    var qty = Math.round(Number(document.getElementById('edQty').value));
+    if (isNaN(qty) || qty < 0 || qty > LIMITS.maxQty) { toast('數量要在 0～' + LIMITS.maxQty + ' 之間'); return; }
+    d.qty = qty;
+    d.batchNote = trimText(document.getElementById('edBatch').value);
+  } else {
+    var ord = Math.round(Number(document.getElementById('edOrd').value));
+    var box = Math.round(Number(document.getElementById('edBox').value));
+    if (isNaN(ord) || ord < 0 || ord > LIMITS.maxOrderCount) { toast('訂單筆數超出範圍'); return; }
+    if (isNaN(box) || box < 0 || box > LIMITS.maxBoxCount) { toast('總盒數超出範圍'); return; }
+    d.orderCount = ord;
+    d.boxCount = box;
+  }
+  d.note = trimText(document.getElementById('edNote').value);
+  d.rev = q.rev + 1;
+  enqueue(q.type, d, q.label);
+  editState = null;
+  renderQueueSheet();
+  render();
+  toast('已改好，重新送出中');
+  sync(true);
+}
+
+function voidRecord(qid) {
+  var q = findQ(qid);
+  if (!q) return;
+  var wasConfirmed = q.state === 'confirmed';
+  var msg = wasConfirmed
+    ? '這筆已經寫進試算表了。作廢會把那一列標成「已作廢」（修訂 ' + (q.rev + 1) + '），不會刪掉。要繼續嗎？'
+    : '要把這筆標成已作廢嗎？';
+  if (!window.confirm(msg)) return;
+  var d = JSON.parse(JSON.stringify(q.data));
+  d.status = '已作廢';
+  d.rev = q.rev + 1;
+  enqueue(q.type, d, q.label);
+  renderQueueSheet();
+  render();
+  toast('已標為作廢，送出中');
+  sync(true);
+}
+
+/* ---- 設定與還原 ---------------------------------------------------- */
+
+function openSettings() {
+  sheetHtml(
+    '<h2>設定與還原</h2>' +
+    '<p class="hint">品項清單以這支手機為主，試算表那張「品項清單備份」是單向備份。換手機或清掉瀏覽器資料時才用得到還原。</p>' +
+    '<div class="tm-fieldlabel">Web App 網址（備用，留空就用內建的）</div>' +
+    '<input class="tm-input" id="setEndpoint" type="url" inputmode="url" placeholder="https://script.google.com/macros/s/…/exec" value="' + esc(load(K.endpoint, '')) + '">' +
+    '<div class="tm-sheetfoot">' +
+      '<button class="tm-btn" type="button" data-act="set-restore">從試算表還原品項</button>' +
+      '<button class="tm-btn primary" type="button" data-act="set-save">儲存網址</button>' +
+    '</div>' +
+    '<div class="tm-sheetfoot">' +
+      '<button class="tm-btn" type="button" data-act="set-ping">測試連線</button>' +
+      '<button class="tm-btn" type="button" data-act="close">關閉</button>' +
+    '</div>' +
+    '<p class="tm-foothint">目前使用：' + esc(S.endpoint.slice(0, 46)) + '…</p>'
+  );
+}
+
+function saveEndpoint() {
+  var v = String(document.getElementById('setEndpoint').value || '').trim();
+  if (v && !/^https:\/\/script\.google\.com\/macros\/s\/[A-Za-z0-9_-]+\/exec$/.test(v)) {
+    toast('網址格式看起來不對，要像 https://script.google.com/macros/s/…/exec');
+    return;
+  }
+  save(K.endpoint, v);
+  S.endpoint = v || DEFAULT_ENDPOINT;
+  toast(v ? '已改用備用網址' : '已改回內建網址');
+  openSettings();
+}
+
+function restoreItems() {
+  if (!navigator.onLine) { toast('目前離線，還原需要連線'); return; }
+  toast('還原中…');
+  jsonp({ action: 'items' }).then(function (res) {
+    if (!res || !res.ok || !Array.isArray(res.items)) { toast('還原失敗：後端沒有回品項'); return; }
+    var added = 0;
+    res.items.forEach(function (r) {
+      if (!r || !r.itemUuid) return;
+      if (findItem(r.itemUuid)) return;
+      S.items.push({ itemUuid: r.itemUuid, name: r.name, unit: r.unit || '', order: Number(r.order) || 0, deleted: false });
+      added++;
+    });
+    if (added > 0) { saveItems(); render(); }
+    toast(added > 0 ? '還原了 ' + added + ' 個品項' : '沒有需要還原的品項');
+  }).catch(function (e) { toast('還原失敗：' + (e && e.message ? e.message : '連線問題')); });
+}
+
+function pingBackend() {
+  if (!navigator.onLine) { toast('目前離線'); return; }
+  toast('測試中…');
+  jsonp({ action: 'ping' }, 15000).then(function (res) {
+    toast(res && res.ok ? '連得上，後端有回應' : '連上了，但回應不正常');
+  }).catch(function (e) { toast('連不上：' + (e && e.message ? e.message : '連線問題')); });
+}
+
+/* ---- 彈出面板控制 -------------------------------------------------- */
+
+var modal = document.getElementById('modal');
+var sheet = document.getElementById('sheet');
+
+function sheetHtml(html) {
+  sheet.innerHTML = html;
+  modal.hidden = false;
+}
+function closeSheet() {
+  modal.hidden = true;
+  sheet.innerHTML = '';
+  qtyState = null;
+  shipState = null;
+  editState = null;
+}
+
+/* ---- 畫面 ---------------------------------------------------------- */
+
+function cardHtml(c) {
+  var steps = STAGES.map(function (s, i) {
+    var cls = i < c.stage ? 'done' : (i === c.stage ? 'now' : '');
+    var t = c.times[TIME_KEYS[i]] ? fmtClock(c.times[TIME_KEYS[i]]) : '—';
+    return '<div class="tm-step ' + cls + '">' + s + '<time>' + t + '</time></div>';
+  }).join('');
+  var done = c.stage >= TIME_KEYS.length;
+  var label = done ? '填數量' : STAGES[c.stage];
+  var elapsed = c.times.start ? fmtSpan(Date.now() - new Date(c.times.start).getTime()) : '尚未開始';
+  var status = STAGE_STATUS[Math.min(c.stage, STAGE_STATUS.length - 1)];
+
+  return '<article class="tm-card" data-id="' + esc(c.id) + '">' +
+    '<div class="tm-cardbody">' +
+      '<h3><span class="nm">' + esc(c.itemName) + '</span>' +
+      (c.batchNote ? '<small>' + esc(c.batchNote) + '</small>' : '') +
+      '<span class="tm-elapsed" data-elapsed="' + esc(c.id) + '">' + esc(elapsed) + '</span></h3>' +
+      '<div class="tm-steps">' + steps + '</div>' +
+    '</div>' +
+    '<button class="tm-main' + (done || c.stage === TIME_KEYS.length - 1 ? ' finish' : '') + '" type="button" data-act="advance" data-id="' + esc(c.id) + '">' + esc(label) + '</button>' +
+    '<div class="tm-foot">' +
+      '<button class="tm-undo" type="button" data-act="undo" data-id="' + esc(c.id) + '">↩ 復原上一步</button>' +
+      '<span class="tm-status' + (done ? ' wait' : '') + '">' + esc(status) + '</span>' +
+    '</div>' +
+  '</article>';
+}
+
+function shipHtml() {
+  if (!S.ship) {
+    return '<h3>還沒開始</h3>' +
+      '<p class="tm-shipmeta">按下去就開始算這一趟出貨的時間。結束後再填通路、訂單筆數與總盒數。</p>' +
+      '<button class="tm-bigmain" type="button" data-act="ship-start">開始出貨</button>';
+  }
+  return '<h3>出貨進行中</h3>' +
+    '<p class="tm-shipmeta">' + fmtClock(S.ship.start) + ' 開始・<span data-elapsed="ship">' + esc(fmtSpan(Date.now() - new Date(S.ship.start).getTime())) + '</span></p>' +
+    '<button class="tm-bigmain finish" type="button" data-act="ship-end">結束出貨</button>' +
+    '<div class="tm-foot" style="margin-top:10px">' +
+      '<button class="tm-undo" type="button" data-act="ship-undo">↩ 取消這次計時</button>' +
+    '</div>';
+}
+
+function render() {
+  // 品項列
+  var bar = document.getElementById('itemBar');
+  var items = liveItems();
+  bar.innerHTML = items.map(function (it) {
+    return '<button type="button" data-act="new-card" data-id="' + esc(it.itemUuid) + '">' + esc(it.name) + '</button>';
+  }).join('') + '<button type="button" class="add" data-act="open-items">＋ 新增品項</button>';
+
+  // 卡片
+  var wrap = document.getElementById('cards');
+  wrap.innerHTML = S.cards.map(cardHtml).join('');
+  document.getElementById('cardsTitle').textContent = '進行中（' + S.cards.length + '）';
+  document.getElementById('cardsEmpty').hidden = S.cards.length > 0;
+  if (items.length === 0) {
+    document.getElementById('cardsEmpty').textContent = '還沒有品項。先按「＋ 新增品項」建立第一個。';
+  } else {
+    document.getElementById('cardsEmpty').textContent = '還沒有進行中的卡片。點上面的品項開一張。';
+  }
+
+  // 出貨
+  document.getElementById('shipBox').innerHTML = shipHtml();
+
+  // 頂端
+  var n = pendingRecords().length;
+  var pb = document.getElementById('pendingBtn');
+  document.getElementById('pendingText').textContent = n > 0 ? '待確認 ' + n + ' 筆' : '全部已同步';
+  pb.className = 'tm-pending' + (n > 0 ? '' : ' clean');
+  var sb = document.getElementById('syncBtn');
+  sb.textContent = syncing ? '同步中…' : '立即同步';
+  sb.disabled = syncing;
+  document.getElementById('offlineBar').hidden = navigator.onLine;
+
+  // 頁籤
+  document.getElementById('tabProd').setAttribute('aria-pressed', String(S.tab === 'prod'));
+  document.getElementById('tabShip').setAttribute('aria-pressed', String(S.tab === 'ship'));
+  document.getElementById('viewProd').hidden = S.tab !== 'prod';
+  document.getElementById('viewShip').hidden = S.tab !== 'ship';
+}
+
+// 只更新「已 N 分」，不整批重畫。重畫會把使用者正按著的按鈕換掉
+function tick() {
+  S.cards.forEach(function (c) {
+    if (!c.times.start) return;
+    var el = document.querySelector('[data-elapsed="' + c.id + '"]');
+    if (el) el.textContent = fmtSpan(Date.now() - new Date(c.times.start).getTime());
+  });
+  if (S.ship) {
+    var se = document.querySelector('[data-elapsed="ship"]');
+    if (se) se.textContent = fmtSpan(Date.now() - new Date(S.ship.start).getTime());
+  }
+}
+
+/* ---- 事件 ---------------------------------------------------------- */
+
+var ACTIONS = {
+  'new-card': function (el) { addCard(el.dataset.id); },
+  'open-items': function () { openItems(); },
+  'advance': function (el) { advance(el.dataset.id); },
+  'undo': function (el) { undo(el.dataset.id); },
+
+  'qty+': function () { bumpQty(1); },
+  'qty-': function () { bumpQty(-1); },
+  'qty+10': function () { bumpQty(10); },
+  'qty-10': function () { bumpQty(-10); },
+  'qty-back': function () { var id = qtyState.cardId; closeSheet(); undo(id); },
+  'qty-ok': function () { commitQty(); },
+
+  'ship-start': function () { startShip(); },
+  'ship-end': function () { endShip(); },
+  'ship-undo': function () { undoShip(); },
+  'ship-ch': function (el) { shipState.channel = el.dataset.ch; renderShipSheet(); },
+  'ord+': function () { bumpField('ordVal', 1, LIMITS.maxOrderCount); },
+  'ord-': function () { bumpField('ordVal', -1, LIMITS.maxOrderCount); },
+  'box+': function () { bumpField('boxVal', 1, LIMITS.maxBoxCount); },
+  'box-': function () { bumpField('boxVal', -1, LIMITS.maxBoxCount); },
+  'ship-cancel': function () { shipState = null; closeSheet(); },
+  'ship-ok': function () { commitShip(); },
+
+  'unit': function (el) { itemDraft.unit = el.dataset.u; captureItemDraft(); renderItemsSheet(); },
+  'item-add': function () { addItem(); },
+  'item-rename': function (el) { renameItem(el.dataset.id); },
+  'item-del': function (el) { deleteItem(el.dataset.id); },
+  'item-up': function (el) { moveItem(el.dataset.id, -1); },
+  'item-down': function (el) { moveItem(el.dataset.id, 1); },
+
+  'q-edit': function (el) { openEdit(el.dataset.qid); },
+  'q-void': function (el) { voidRecord(el.dataset.qid); },
+  'q-back': function () { editState = null; renderQueueSheet(); },
+  'q-save': function () { commitEdit(); },
+  'q-sync': function () { sync(false).then(function () { if (!modal.hidden) renderQueueSheet(); }); },
+
+  'set-save': function () { saveEndpoint(); },
+  'set-restore': function () { restoreItems(); },
+  'set-ping': function () { pingBackend(); },
+
+  'close': function () { closeSheet(); }
+};
+
+function bumpField(id, delta, max) {
+  var el = document.getElementById(id);
+  if (!el) return;
+  var v = Math.round(Number(el.value));
+  if (isNaN(v)) v = 0;
+  el.value = clamp(v + delta, 0, max);
+}
+function captureItemDraft() {
+  var el = document.getElementById('newItemName');
+  if (el) itemDraft.name = el.value;
+}
+
+document.addEventListener('click', function (e) {
+  var el = e.target.closest ? e.target.closest('[data-act]') : null;
+  if (!el) return;
+  var fn = ACTIONS[el.dataset.act];
+  if (!fn) return;
+  e.preventDefault();
+  fn(el);
+});
+
+document.getElementById('tabProd').addEventListener('click', function () { S.tab = 'prod'; render(); });
+document.getElementById('tabShip').addEventListener('click', function () { S.tab = 'ship'; render(); });
+document.getElementById('syncBtn').addEventListener('click', function () { sync(false); });
+document.getElementById('pendingBtn').addEventListener('click', openQueue);
+document.getElementById('itemsBtn').addEventListener('click', openItems);
+document.getElementById('settingsBtn').addEventListener('click', openSettings);
+modal.addEventListener('click', function (e) { if (e.target === modal) closeSheet(); });
+
+window.addEventListener('online', function () { render(); sync(true); });
+window.addEventListener('offline', render);
+document.addEventListener('visibilitychange', function () {
+  if (!document.hidden) { render(); sync(true); }
+});
+
+/* ---- 啟動 ---------------------------------------------------------- */
+
+pruneQueue();
+render();
+tick();
+setInterval(tick, 15000);
+setInterval(function () { if (pendingRecords().length > 0 || S.queue.length > 0) sync(true); }, 120000);
+sync(true);
+
+// Service Worker 只在安全來源能註冊（正式站是 https，本機測試是 localhost）。
+// 直接用 file:// 打開時註冊不了，那是預期行為，只是失去離線開啟能力。
+if ('serviceWorker' in navigator && window.isSecureContext) {
+  window.addEventListener('load', function () {
+    navigator.serviceWorker.register('sw.js').catch(function () { /* 沒註冊成功只是失去離線開啟，資料不受影響 */ });
+  });
+}
+
+// 測試用出口（jsdom 測試會用到；瀏覽器裡不影響任何行為）
+window.__timer = {
+  S: S, K: K, STAGES: STAGES, TIME_KEYS: TIME_KEYS,
+  addCard: addCard, advance: advance, undo: undo, render: render,
+  openQty: openQty, commitQty: commitQty, enqueue: enqueue,
+  buildProduction: buildProduction, isoLocal: isoLocal, uuid: uuid,
+  pendingRecords: pendingRecords, findQ: findQ, sync: sync, check: check,
+  addItem: addItem, openItems: openItems, renameItem: renameItem,
+  deleteItem: deleteItem, moveItem: moveItem, liveItems: liveItems,
+  startShip: startShip, endShip: endShip, commitShip: commitShip,
+  openQueue: openQueue, openEdit: openEdit, commitEdit: commitEdit, voidRecord: voidRecord,
+  setEndpoint: function (u) { S.endpoint = u; }
+};
+
+})();
+</script>
+</body>
+</html>

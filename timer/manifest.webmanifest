@@ -1,0 +1,34 @@
+{
+  "name": "暮日計時",
+  "short_name": "暮日計時",
+  "description": "暮日甜點施作工時記錄。點大按鈕就完成登記，沒訊號也能用。",
+  "lang": "zh-Hant-TW",
+  "dir": "ltr",
+  "start_url": "./",
+  "scope": "./",
+  "id": "/order/timer/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#fffaf7",
+  "theme_color": "#dd5434",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "icon-maskable.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    },
+    {
+      "src": "../logo-circle.jpg",
+      "sizes": "2047x2048",
+      "type": "image/jpeg",
+      "purpose": "any"
+    }
+  ]
+}
