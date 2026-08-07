@@ -69,6 +69,8 @@ button:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
 .tm-pending i{width:8px;height:8px;border-radius:50%;background:var(--wait);display:block;flex:0 0 auto}
 .tm-pending.clean{color:var(--ok)}
 .tm-pending.clean i{background:var(--ok)}
+.tm-pending.bad{color:#b3261e}
+.tm-pending.bad i{background:#b3261e}
 .tm-sync{
   font-size:13px;font-weight:700;padding:9px 14px;
   border-radius:999px;border:1.5px solid var(--brand);background:#fff;color:var(--brand);
@@ -228,6 +230,11 @@ button:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
 .tm-badge.wait{background:#fff5e0;color:var(--wait)}
 .tm-badge.ok{background:#eaf4ea;color:var(--ok)}
 .tm-badge.void{background:#eef0f1;color:var(--void)}
+.tm-badge.bad{background:#fdeceb;color:#b3261e}
+.tm-why{
+  margin:0 0 8px;padding:10px 12px;border-radius:12px;
+  background:#fdeceb;color:#7a1f12;font-size:12.5px;line-height:1.6;
+}
 
 .tm-toast{
   position:fixed;left:50%;bottom:calc(24px + env(safe-area-inset-bottom));transform:translateX(-50%);
@@ -328,11 +335,24 @@ var K = {
   ship: 'moodri.timer.ship.v1',
   queue: 'moodri.timer.queue.v1',
   endpoint: 'moodri.timer.endpoint.v1',
-  lastQty: 'moodri.timer.lastqty.v1'
+  lastQty: 'moodri.timer.lastqty.v1',
+  lastTrays: 'moodri.timer.lasttrays.v1'
 };
 
 // 已查核成功的紀錄留這麼多天再清掉。留著是為了「按錯了要作廢」還找得到那一筆
 var KEEP_CONFIRMED_DAYS = 14;
+
+/**
+ * 查核成功回來、但這筆不在結果裡，累積這麼多次就判定「送不出去」。
+ *
+ * 為什麼要有這個：送出走 no-cors，讀不到後端的回應。若某筆被後端驗證擋下來
+ * （時間順序、數量超界、字數過長），前端完全不知道，只會每兩分鐘重送一次，
+ * 永遠不會成功，而畫面上只有「待確認 1 筆」掛在那裡不動。
+ *
+ * 判斷依據刻意不是「重送幾次」而是「查得到查核結果、但裡面沒有這筆」：
+ * 離線或訊號差時 POST 根本沒出去（sentAt 是空的），不會誤判成被擋。
+ */
+var STUCK_AFTER_MISSES = 3;
 
 /* ---- 小工具 -------------------------------------------------------- */
 
@@ -434,6 +454,7 @@ var S = {
   queue: load(K.queue, []),
   endpoint: load(K.endpoint, '') || DEFAULT_ENDPOINT,
   lastQty: load(K.lastQty, {}),
+  lastTrays: load(K.lastTrays, {}),
   tab: 'prod'
 };
 
@@ -452,6 +473,9 @@ function findItem(itemUuid) {
 }
 function pendingRecords() {
   return S.queue.filter(function (q) { return q.type !== 'items' && q.state === 'pending'; });
+}
+function stuckRecords() {
+  return S.queue.filter(function (q) { return q.state === 'stuck'; });
 }
 
 /* ---- 佇列（送出前一律先進這裡） ------------------------------------ */
@@ -472,6 +496,7 @@ function enqueue(type, record, label) {
     key: key,
     rev: type === 'items' ? 0 : record.rev,
     state: 'pending',
+    miss: 0,   // 改過內容就重新算，之前被擋下來的理由可能已經修好了
     label: label || (idx >= 0 ? S.queue[idx].label : ''),
     createdAt: idx >= 0 ? S.queue[idx].createdAt : isoLocal(new Date()),
     updatedAt: isoLocal(new Date()),
@@ -635,6 +660,7 @@ function check(silent) {
 
   var groups = chunk(list, LIMITS.query);
   var confirmed = 0;
+  var newlyStuck = 0;
 
   return groups.reduce(function (p, group) {
     return p.then(function () {
@@ -648,32 +674,66 @@ function check(silent) {
           // 送了新版本但後端還停在舊版本，代表這次覆寫沒吃到，要留著再送。
           if (rev !== undefined && !isNaN(rev) && rev >= q.rev) {
             q.state = 'confirmed';
+            q.miss = 0;
             q.updatedAt = isoLocal(new Date());
             confirmed++;
+          } else if (q.sentAt) {
+            // 查核通了、後端也回話了，就是沒有這筆——而且它確實送出去過。
+            // 這是「被後端擋下來」的證據，不是網路問題。
+            q.miss = (q.miss || 0) + 1;
+            if (q.miss >= STUCK_AFTER_MISSES) {
+              q.state = 'stuck';
+              q.updatedAt = isoLocal(new Date());
+              newlyStuck++;
+            }
           }
         });
       });
     });
   }, Promise.resolve()).then(function () {
-    if (confirmed > 0) saveQueue();
-    if (!silent && confirmed === 0) toast('查核完成，還沒有新的一筆寫進試算表');
-    return { confirmed: confirmed };
+    if (confirmed > 0 || newlyStuck > 0) saveQueue();
+    if (newlyStuck > 0) toast(newlyStuck + ' 筆送不出去，點上面的紅字看是哪幾筆');
+    else if (!silent && confirmed === 0) toast('查核完成，還沒有新的一筆寫進試算表');
+    return { confirmed: confirmed, stuck: newlyStuck };
   });
 }
 
 /* ---- 生產：狀態機 -------------------------------------------------- */
 
-function nextBatchNote(itemUuid) {
-  // 自動編「第 N 爐」。廚房裡手是髒的，能不打字就不打字；要改再進更正面板改。
-  var today = localDateKey(new Date());
-  var n = 0;
+/**
+ * 自動編「第 N 爐」。廚房裡手是髒的，能不打字就不打字；要改再進更正面板改。
+ *
+ * 爐號延到按下「開始做」那一刻才決定，不在建立卡片時就編。
+ * 因為一筆紀錄的日期取的是「開始做」的日期：昨天開的卡今天才按開始做，
+ * 資料算今天，卻會跟今天新開的卡撞成同一個第 1 爐。
+ *
+ * 算法是掃「同品項、同一天」已經用掉的爐號取最大值 +1，不是數張數——
+ * 使用者手改過批次備註時，數張數會重複編號。
+ */
+function nextBatchNote(itemUuid, dateKey) {
+  var used = 0;
+  function take(text) {
+    var m = /第\s*(\d+)\s*爐/.exec(String(text || ''));
+    if (m) used = Math.max(used, Number(m[1]));
+  }
   S.cards.forEach(function (c) {
-    if (c.itemUuid === itemUuid && c.createdDate === today) n++;
+    if (c.itemUuid !== itemUuid || !c.times.start) return;
+    if (localDateKey(new Date(c.times.start)) !== dateKey) return;
+    take(c.batchNote);
   });
   S.queue.forEach(function (q) {
-    if (q.type === 'production' && q.data && q.data.itemUuid === itemUuid && q.data.date === today) n++;
+    if (q.type !== 'production' || !q.data) return;
+    if (q.data.itemUuid !== itemUuid || q.data.date !== dateKey) return;
+    take(q.data.batchNote);
   });
-  return '第' + (n + 1) + '爐';
+  return '第' + (used + 1) + '爐';
+}
+
+/** 盤數接在批次備註後面（`第1爐・3盤`）。烤箱產能是用盤算的，那是目前唯一缺的產能資料 */
+function withTrays(batchNote, trays) {
+  var base = String(batchNote || '');
+  if (!(trays > 0)) return base;
+  return base ? base + '・' + trays + '盤' : trays + '盤';
 }
 
 function addCard(itemUuid) {
@@ -684,7 +744,7 @@ function addCard(itemUuid) {
     itemUuid: item.itemUuid,
     itemName: item.name,     // 名稱快照：之後改名，這張卡與寫出去的紀錄都不跟著變
     unit: item.unit || '',
-    batchNote: nextBatchNote(item.itemUuid),
+    batchNote: '',                            // 按下「開始做」才編爐號，理由見 nextBatchNote
     createdDate: localDateKey(new Date()),
     stage: 0,
     times: {},
@@ -712,6 +772,7 @@ function advance(id) {
     return;
   }
   c.times[TIME_KEYS[c.stage]] = isoLocal(now);
+  if (c.stage === 0) c.batchNote = nextBatchNote(c.itemUuid, localDateKey(now));
   c.stage++;
   saveCards();
   render();
@@ -730,6 +791,8 @@ function undo(id) {
   }
   c.stage--;
   delete c.times[TIME_KEYS[c.stage]];
+  // 復原掉「開始做」就把爐號還回去，否則這個號碼會被佔著，下一張卡跳號
+  if (c.stage === 0) c.batchNote = '';
   saveCards();
   render();
 }
@@ -742,8 +805,24 @@ function openQty(cardId) {
   var c = findCard(cardId);
   if (!c) return;
   var last = S.lastQty[c.itemUuid];
-  qtyState = { cardId: cardId, qty: (typeof last === 'number' && last > 0) ? last : 1, note: c.note || '' };
+  var lastT = S.lastTrays[c.itemUuid];
+  qtyState = {
+    cardId: cardId,
+    qty: (typeof last === 'number' && last > 0) ? last : 1,
+    trays: (typeof lastT === 'number' && lastT > 0) ? String(lastT) : '',
+    note: c.note || ''
+  };
   renderQtySheet();
+}
+
+function captureQtyInputs() {
+  if (!qtyState) return;
+  var q = document.getElementById('qtyVal');
+  var t = document.getElementById('qtyTrays');
+  var n = document.getElementById('qtyNote');
+  if (q && q.value !== '') qtyState.qty = Math.round(Number(q.value)) || 0;
+  if (t) qtyState.trays = t.value;
+  if (n) qtyState.note = n.value;
 }
 
 function renderQtySheet() {
@@ -762,6 +841,10 @@ function renderQtySheet() {
       '<button type="button" data-act="qty-10">−10</button>' +
       '<button type="button" data-act="qty+10">＋10</button>' +
       (unit ? '<span style="align-self:center;font-size:15px;color:var(--muted);font-weight:700">單位：' + esc(unit) + '</span>' : '') +
+    '</div>' +
+    '<div class="tm-segrow" style="margin-top:16px">' +
+      '<span>用了幾盤（可留空）</span>' +
+      '<input class="tm-input" id="qtyTrays" type="number" inputmode="numeric" min="0" max="99" value="' + esc(qtyState.trays) + '">' +
     '</div>' +
     '<div class="tm-fieldlabel">備註（可留空）</div>' +
     '<input class="tm-input" id="qtyNote" type="text" maxlength="' + LIMITS.text + '" value="' + esc(qtyState.note) + '" placeholder="例：外皮偏深，下爐降 10 度">' +
@@ -803,16 +886,19 @@ function buildProduction(card, qty, note, rev, status) {
 function commitQty() {
   var c = findCard(qtyState.cardId);
   if (!c) { closeSheet(); return; }
-  var input = document.getElementById('qtyVal');
-  var qty = input ? Math.round(Number(input.value)) : qtyState.qty;
+  captureQtyInputs();
+  var qty = Math.round(Number(qtyState.qty));
   if (isNaN(qty) || qty < 0 || qty > LIMITS.maxQty) { toast('數量要在 0～' + LIMITS.maxQty + ' 之間'); return; }
-  var noteEl = document.getElementById('qtyNote');
-  var note = trimText(noteEl ? noteEl.value : '');
+  var trays = qtyState.trays === '' ? 0 : Math.round(Number(qtyState.trays));
+  if (isNaN(trays) || trays < 0 || trays > 99) { toast('盤數要在 0～99 之間，不知道就留空'); return; }
+  var note = trimText(qtyState.note);
 
   var rec = buildProduction(c, qty, note, 0, '正常');
-  enqueue('production', rec, c.itemName + '｜' + (c.batchNote || ''));
+  rec.batchNote = withTrays(c.batchNote, trays);
+  enqueue('production', rec, c.itemName + '｜' + (rec.batchNote || ''));
   S.lastQty[c.itemUuid] = qty;
   save(K.lastQty, S.lastQty);
+  if (trays > 0) { S.lastTrays[c.itemUuid] = trays; save(K.lastTrays, S.lastTrays); }
   S.cards = S.cards.filter(function (x) { return x.id !== c.id; });
   saveCards();
   closeSheet();
@@ -956,14 +1042,14 @@ var MANUAL_SEGS = [
 function openManual() {
   manualState = {
     itemUuid: '', date: localDateKey(new Date()), time: '09:00',
-    prep: '', bake: '', cool: '', pack: '', qty: '', batchNote: '', note: ''
+    prep: '', bake: '', cool: '', pack: '', qty: '', trays: '', batchNote: '', note: ''
   };
   renderManualSheet();
 }
 
 function captureManual() {
   if (!manualState) return;
-  var pairs = [['mDate', 'date'], ['mTime', 'time'], ['mQty', 'qty'], ['mBatch', 'batchNote'], ['mNote', 'note']];
+  var pairs = [['mDate', 'date'], ['mTime', 'time'], ['mQty', 'qty'], ['mTrays', 'trays'], ['mBatch', 'batchNote'], ['mNote', 'note']];
   MANUAL_SEGS.forEach(function (s) { pairs.push([s.id, s.key]); });
   pairs.forEach(function (p) {
     var el = document.getElementById(p[0]);
@@ -1001,6 +1087,10 @@ function renderManualSheet() {
     segRows +
     '<div class="tm-fieldlabel">產出數量' + (picked && picked.unit ? '（' + esc(picked.unit) + '）' : '') + '</div>' +
     '<input class="tm-input" id="mQty" type="number" inputmode="numeric" min="0" max="' + LIMITS.maxQty + '" value="' + esc(manualState.qty) + '">' +
+    '<div class="tm-segrow" style="margin-top:12px">' +
+      '<span>用了幾盤（可留空）</span>' +
+      '<input class="tm-input" id="mTrays" type="number" inputmode="numeric" min="0" max="99" value="' + esc(manualState.trays) + '">' +
+    '</div>' +
     '<div class="tm-fieldlabel">批次備註</div>' +
     '<input class="tm-input" id="mBatch" type="text" maxlength="' + LIMITS.text + '" value="' + esc(manualState.batchNote) + '" placeholder="例：紙本補登">' +
     '<div class="tm-fieldlabel">備註</div>' +
@@ -1031,6 +1121,8 @@ function commitManual() {
   if (manualState.qty === '' || isNaN(qty) || qty < 0 || qty > LIMITS.maxQty) {
     toast('數量要在 0～' + LIMITS.maxQty + ' 之間'); return;
   }
+  var trays = manualState.trays === '' ? 0 : Math.round(Number(manualState.trays));
+  if (isNaN(trays) || trays < 0 || trays > 99) { toast('盤數要在 0～99 之間，不知道就留空'); return; }
 
   var start = new Date(manualState.date + 'T' + manualState.time.slice(0, 5) + ':00');
   if (isNaN(start.getTime())) { toast('日期或時間讀不出來'); return; }
@@ -1043,7 +1135,7 @@ function commitManual() {
     uuid: uuid(),
     itemUuid: item.itemUuid,
     itemName: item.name,
-    batchNote: trimText(manualState.batchNote) || '手動補登',
+    batchNote: withTrays(trimText(manualState.batchNote) || '手動補登', trays),
     start: isoLocal(stamps[0]), ovenIn: isoLocal(stamps[1]), ovenOut: isoLocal(stamps[2]),
     packStart: isoLocal(stamps[3]), packEnd: isoLocal(stamps[4]),
     qty: Math.round(qty),
@@ -1183,7 +1275,9 @@ function openQueue() {
 function queueRowHtml(q) {
   var badge = q.state === 'confirmed'
     ? '<span class="tm-badge ok">已同步</span>'
-    : '<span class="tm-badge wait">待確認</span>';
+    : (q.state === 'stuck'
+      ? '<span class="tm-badge bad">送不出去</span>'
+      : '<span class="tm-badge wait">待確認</span>');
   var voided = q.data && q.data.status === '已作廢';
   if (voided) badge += ' <span class="tm-badge void">已作廢</span>';
 
@@ -1199,7 +1293,10 @@ function queueRowHtml(q) {
 
   var ops = '';
   if (!voided) {
-    if (q.state === 'pending') {
+    if (q.state === 'stuck') {
+      ops += '<button type="button" data-act="q-retry" data-qid="' + esc(q.qid) + '">再試一次</button>';
+    }
+    if (q.state === 'pending' || q.state === 'stuck') {
       ops += '<button type="button" data-act="q-edit" data-qid="' + esc(q.qid) + '">修改</button>';
     }
     ops += '<button type="button" data-act="q-void" data-qid="' + esc(q.qid) + '" class="danger">作廢</button>';
@@ -1226,11 +1323,19 @@ function renderQueueSheet() {
     .sort(function (a, b) { return String(b.createdAt).localeCompare(String(a.createdAt)); });
   var pending = recs.filter(function (q) { return q.state === 'pending'; });
   var confirmed = recs.filter(function (q) { return q.state === 'confirmed'; });
+  var stuck = recs.filter(function (q) { return q.state === 'stuck'; });
 
   sheetHtml(
     '<h2>紀錄與更正</h2>' +
     '<p class="hint">送出後一律先標「待確認」，要等查核到試算表真的有那一列，才會翻成「已同步」。' +
     '已同步的不能直接改值，只能作廢再補一筆——否則你以為改了，試算表其實沒動。</p>' +
+    (stuck.length
+      ? '<div class="tm-fieldlabel">送不出去（' + stuck.length + '）</div>' +
+        '<p class="tm-why">這幾筆送出去了，但試算表上一直查不到，很可能被後端擋下來——' +
+        '常見原因是時間順序不合理、數量超出範圍、或名稱備註太長。' +
+        '已經停止自動重送，免得一直白打。修改內容後會自動重送，或直接作廢。</p>' +
+        '<ul class="tm-list">' + stuck.map(queueRowHtml).join('') + '</ul>'
+      : '') +
     '<div class="tm-fieldlabel">待確認（' + pending.length + '）</div>' +
     (pending.length ? '<ul class="tm-list">' + pending.map(queueRowHtml).join('') + '</ul>' : '<p class="tm-empty">沒有待確認的紀錄。</p>') +
     '<div class="tm-fieldlabel">已同步（近 ' + KEEP_CONFIRMED_DAYS + ' 天，' + confirmed.length + '）</div>' +
@@ -1252,9 +1357,23 @@ var editState = null;
 function openEdit(qid) {
   var q = findQ(qid);
   if (!q) return;
-  if (q.state !== 'pending') { toast('已同步的紀錄不能直接改，請用「作廢」再補一筆'); return; }
+  if (q.state === 'confirmed') { toast('已同步的紀錄不能直接改，請用「作廢」再補一筆'); return; }
   editState = { qid: qid };
   renderEditSheet();
+}
+
+/** 送不出去的那幾筆，使用者自己判斷沒問題時可以再推一次 */
+function retryRecord(qid) {
+  var q = findQ(qid);
+  if (!q) return;
+  q.miss = 0;
+  q.state = 'pending';
+  q.updatedAt = isoLocal(new Date());
+  saveQueue();
+  renderQueueSheet();
+  render();
+  toast('重新送一次');
+  sync(true);
 }
 
 function renderEditSheet() {
@@ -1502,11 +1621,14 @@ function render() {
   // 出貨
   document.getElementById('shipBox').innerHTML = shipHtml();
 
-  // 頂端
+  // 頂端。送不出去優先蓋過待確認——那是要你動手處理的，不是等一下就好
   var n = pendingRecords().length;
+  var bad = stuckRecords().length;
   var pb = document.getElementById('pendingBtn');
-  document.getElementById('pendingText').textContent = n > 0 ? '待確認 ' + n + ' 筆' : '全部已同步';
-  pb.className = 'tm-pending' + (n > 0 ? '' : ' clean');
+  document.getElementById('pendingText').textContent = bad > 0
+    ? '⚠ ' + bad + ' 筆送不出去'
+    : (n > 0 ? '待確認 ' + n + ' 筆' : '全部已同步');
+  pb.className = 'tm-pending' + (bad > 0 ? ' bad' : (n > 0 ? '' : ' clean'));
   var sb = document.getElementById('syncBtn');
   sb.textContent = syncing ? '同步中…' : '立即同步';
   sb.disabled = syncing;
@@ -1545,7 +1667,7 @@ var ACTIONS = {
   'qty-': function () { bumpQty(-1); },
   'qty+10': function () { bumpQty(10); },
   'qty-10': function () { bumpQty(-10); },
-  'qty-back': function () { var id = qtyState.cardId; closeSheet(); undo(id); },
+  'qty-back': function () { captureQtyInputs(); var id = qtyState.cardId; closeSheet(); undo(id); },
   'qty-ok': function () { commitQty(); },
 
   'ship-start': function () { startShip(); },
@@ -1576,6 +1698,7 @@ var ACTIONS = {
   'item-down': function (el) { moveItem(el.dataset.id, 1); },
 
   'q-edit': function (el) { openEdit(el.dataset.qid); },
+  'q-retry': function (el) { retryRecord(el.dataset.qid); },
   'q-void': function (el) { voidRecord(el.dataset.qid); },
   'q-back': function () { editState = null; renderQueueSheet(); },
   'q-save': function () { commitEdit(); },
@@ -1648,7 +1771,9 @@ window.__timer = {
   addCard: addCard, advance: advance, undo: undo, render: render,
   openQty: openQty, commitQty: commitQty, enqueue: enqueue,
   buildProduction: buildProduction, isoLocal: isoLocal, uuid: uuid,
-  pendingRecords: pendingRecords, findQ: findQ, sync: sync, check: check,
+  pendingRecords: pendingRecords, stuckRecords: stuckRecords, retryRecord: retryRecord,
+  nextBatchNote: nextBatchNote, withTrays: withTrays,
+  findQ: findQ, sync: sync, check: check,
   addItem: addItem, openItems: openItems, renameItem: renameItem,
   restoreItems: restoreItems, maybeAutoRestoreItems: maybeAutoRestoreItems,
   isLocalPreviewOnProd: isLocalPreviewOnProd,
