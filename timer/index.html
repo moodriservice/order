@@ -204,6 +204,13 @@ button:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
 }
 .tm-chips button[aria-pressed="true"]{background:var(--brand);border-color:var(--brand);color:#fff}
 
+/* 手動補登：左邊寫段落名稱，右邊填分鐘數 */
+.tm-segrow{display:flex;align-items:center;gap:10px;margin-bottom:8px}
+.tm-segrow span{flex:1;min-width:0;font-size:14px;line-height:1.4;color:var(--ink)}
+.tm-segrow .tm-input{flex:0 0 92px;width:92px;text-align:center;font-variant-numeric:tabular-nums}
+.tm-daterow{display:flex;gap:8px}
+.tm-daterow .tm-input{flex:1;min-width:0}
+
 .tm-list{list-style:none;margin:0;padding:0;display:grid;gap:8px}
 .tm-list li{
   background:#fff;border:1px solid var(--line);border-radius:14px;padding:10px 12px;
@@ -280,6 +287,7 @@ button:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
 
   <p class="tm-foothint">
     <button id="itemsBtn" type="button">品項管理</button>
+    <button id="manualBtn" type="button">手動補登</button>
     <button id="settingsBtn" type="button">設定與還原</button>
   </p>
 </div>
@@ -489,6 +497,19 @@ function pruneQueue() {
 
 var syncing = false;
 
+/**
+ * 同步進行中又有人要求同步時，記下來、跑完再補一次。
+ * 早期版本是直接丟掉，結果連續補登幾筆或連按幾個品項時，
+ * 後面那幾筆會卡在佇列裡等兩分鐘的定時同步才送出去。
+ * 資料不會掉，但「按完就送出去了」的預期會落空。
+ */
+var syncAgain = false;
+function drainSyncAgain() {
+  if (!syncAgain) return;
+  syncAgain = false;
+  sync(true);
+}
+
 function post(type, records) {
   // no-cors：讀不到回應，所以「送出成功」只代表送出去了，不代表寫進試算表。
   // 真正算數的是後面 JSONP 查核那一步。
@@ -539,7 +560,7 @@ function chunk(arr, size) {
  * silent=true 時不跳提示（自動同步用），使用者按「立即同步」才報結果。
  */
 function sync(silent) {
-  if (syncing) return Promise.resolve();
+  if (syncing) { syncAgain = true; return Promise.resolve(); }
   var outbox = S.queue.filter(function (q) { return q.state === 'pending'; });
   var toCheck = pendingRecords();
   if (outbox.length === 0 && toCheck.length === 0) {
@@ -594,10 +615,12 @@ function sync(silent) {
       else if (res && res.confirmed > 0) toast('已同步 ' + res.confirmed + ' 筆，還有 ' + pendingRecords().length + ' 筆待確認');
       else toast('已送出。還有 ' + pendingRecords().length + ' 筆待確認');
     }
+    drainSyncAgain();
   }).catch(function (err) {
     syncing = false;
     render();
     if (!silent) toast('同步沒完成：' + (err && err.message ? err.message : '未知錯誤'));
+    drainSyncAgain();
   });
 }
 
@@ -817,12 +840,27 @@ function endShip() {
   if (!S.ship) return;
   var end = isoLocal(new Date());
   if (new Date(end).getTime() < new Date(S.ship.start).getTime()) { toast('結束時間比開始還早，先確認手機時間'); return; }
-  shipState = { start: S.ship.start, end: end, channel: '', orderCount: 1, boxCount: 1, note: '' };
+  shipState = { start: S.ship.start, end: end, channel: '', items: [], orderCount: 1, boxCount: 1, note: '' };
   renderShipSheet();
+}
+
+/**
+ * 重畫這張表單前先把已經打好的數字撈回 shipState。
+ * 不做的話，選一下通路或品項就把剛剛輸入的訂單筆數清成預設值。
+ */
+function captureShipInputs() {
+  if (!shipState) return;
+  var o = document.getElementById('ordVal');
+  var b = document.getElementById('boxVal');
+  var n = document.getElementById('shipNote');
+  if (o && o.value !== '') shipState.orderCount = Math.max(0, Math.round(Number(o.value)) || 0);
+  if (b && b.value !== '') shipState.boxCount = Math.max(0, Math.round(Number(b.value)) || 0);
+  if (n) shipState.note = n.value;
 }
 
 function renderShipSheet() {
   var mins = Math.round((new Date(shipState.end) - new Date(shipState.start)) / 60000);
+  var items = liveItems();
   sheetHtml(
     '<h2>這趟出貨做完了</h2>' +
     '<p class="hint">' + fmtClock(shipState.start) + ' → ' + fmtClock(shipState.end) + '，共 ' + mins + ' 分鐘。</p>' +
@@ -830,6 +868,15 @@ function renderShipSheet() {
     '<div class="tm-chips">' + CHANNELS.map(function (ch) {
       return '<button type="button" data-act="ship-ch" data-ch="' + esc(ch) + '" aria-pressed="' + (shipState.channel === ch) + '">' + esc(ch) + '</button>';
     }).join('') + '</div>' +
+    // 只記「這批出的是哪些品項」，不記各自花多久。
+    // 包一張訂單時手上同時有好幾個品項，硬要拆成各自幾分鐘只能用猜的。
+    // 之後某批剛好是單一品項，就能回頭比較不同品項的每筆時間；混批就當混批看。
+    '<div class="tm-fieldlabel">這批出的品項（可複選，可不選）</div>' +
+    (items.length
+      ? '<div class="tm-chips">' + items.map(function (it) {
+          return '<button type="button" data-act="ship-item" data-id="' + esc(it.itemUuid) + '" aria-pressed="' + (shipState.items.indexOf(it.itemUuid) >= 0) + '">' + esc(it.name) + '</button>';
+        }).join('') + '</div>'
+      : '<p class="tm-empty">還沒有品項，可以先跳過。</p>') +
     '<div class="tm-fieldlabel">訂單筆數</div>' +
     '<div class="tm-qtyrow">' +
       '<button type="button" data-act="ord-" aria-label="訂單筆數減一">−</button>' +
@@ -857,7 +904,17 @@ function commitShip() {
   var box = Math.round(Number(document.getElementById('boxVal').value));
   if (isNaN(ord) || ord < 0 || ord > LIMITS.maxOrderCount) { toast('訂單筆數要在 0～' + LIMITS.maxOrderCount + ' 之間'); return; }
   if (isNaN(box) || box < 0 || box > LIMITS.maxBoxCount) { toast('總盒數要在 0～' + LIMITS.maxBoxCount + ' 之間'); return; }
-  var note = trimText(document.getElementById('shipNote').value);
+
+  // 品項寫進 note，不另開欄位：後端的出貨分頁欄位是固定的，
+  // 加欄位要連 validateShipping 一起改再重新部署，第一版不划算。
+  var picked = shipState.items.map(function (id) {
+    var it = findItem(id);
+    return it ? it.name : null;
+  }).filter(Boolean);
+  var typed = trimText(document.getElementById('shipNote').value);
+  var note = picked.length
+    ? trimText('品項：' + picked.join('、') + (typed ? '｜' + typed : ''))
+    : typed;
 
   var rec = {
     uuid: uuid(),
@@ -878,6 +935,129 @@ function commitShip() {
   closeSheet();
   render();
   toast('出貨已記下，待確認');
+  sync(true);
+}
+
+/* ---- 手動補登（紙本回填、當下忘記按時用） -------------------------- */
+
+/**
+ * 為什麼是填「每段幾分鐘」而不是填五個時鐘時間：
+ * 紙本上寫的本來就是「麵糊 30 分鐘」「入模到包裝 40 分鐘」這種段落長度，
+ * 沒有人會記下 09:03 進烤箱。填時長，五個時間點由程式往後推，順序也保證遞增。
+ */
+var manualState = null;
+var MANUAL_SEGS = [
+  { key: 'prep', id: 'mPrep', label: '備料到進烤箱（算人力）' },
+  { key: 'bake', id: 'mBake', label: '烤箱：進烤箱到出爐' },
+  { key: 'cool', id: 'mCool', label: '冷卻：出爐到開始包裝' },
+  { key: 'pack', id: 'mPack', label: '包裝：開始包裝到包裝完（算人力）' }
+];
+
+function openManual() {
+  manualState = {
+    itemUuid: '', date: localDateKey(new Date()), time: '09:00',
+    prep: '', bake: '', cool: '', pack: '', qty: '', batchNote: '', note: ''
+  };
+  renderManualSheet();
+}
+
+function captureManual() {
+  if (!manualState) return;
+  var pairs = [['mDate', 'date'], ['mTime', 'time'], ['mQty', 'qty'], ['mBatch', 'batchNote'], ['mNote', 'note']];
+  MANUAL_SEGS.forEach(function (s) { pairs.push([s.id, s.key]); });
+  pairs.forEach(function (p) {
+    var el = document.getElementById(p[0]);
+    if (el) manualState[p[1]] = el.value;
+  });
+}
+
+function renderManualSheet() {
+  var items = liveItems();
+  var picked = findItem(manualState.itemUuid);
+  var segRows = MANUAL_SEGS.map(function (s) {
+    return '<div class="tm-segrow">' +
+      '<span>' + s.label + '</span>' +
+      '<input class="tm-input" id="' + s.id + '" type="number" inputmode="numeric" min="0" value="' + esc(manualState[s.key]) + '">' +
+    '</div>';
+  }).join('');
+
+  sheetHtml(
+    '<h2>手動補登一筆</h2>' +
+    '<p class="hint">紙本回填、或當下忘記按的時候用。填「每段花多久」就好，五個時間點由程式往後推。' +
+    '<strong>不知道的段落不要填 0</strong>——0 的意思是「真的沒花時間」，填錯會把平均值拉歪，' +
+    '而定價就是看這些平均值算出來的。</p>' +
+    '<div class="tm-fieldlabel">品項</div>' +
+    (items.length
+      ? '<div class="tm-chips">' + items.map(function (it) {
+          return '<button type="button" data-act="m-item" data-id="' + esc(it.itemUuid) + '" aria-pressed="' + (manualState.itemUuid === it.itemUuid) + '">' + esc(it.name) + '</button>';
+        }).join('') + '</div>'
+      : '<p class="tm-empty">還沒有品項，先去「品項管理」建一個。</p>') +
+    '<div class="tm-fieldlabel">日期與「開始做」的時間</div>' +
+    '<div class="tm-daterow">' +
+      '<input class="tm-input" id="mDate" type="date" value="' + esc(manualState.date) + '">' +
+      '<input class="tm-input" id="mTime" type="time" value="' + esc(manualState.time) + '">' +
+    '</div>' +
+    '<div class="tm-fieldlabel">各段花了幾分鐘</div>' +
+    segRows +
+    '<div class="tm-fieldlabel">產出數量' + (picked && picked.unit ? '（' + esc(picked.unit) + '）' : '') + '</div>' +
+    '<input class="tm-input" id="mQty" type="number" inputmode="numeric" min="0" max="' + LIMITS.maxQty + '" value="' + esc(manualState.qty) + '">' +
+    '<div class="tm-fieldlabel">批次備註</div>' +
+    '<input class="tm-input" id="mBatch" type="text" maxlength="' + LIMITS.text + '" value="' + esc(manualState.batchNote) + '" placeholder="例：紙本補登">' +
+    '<div class="tm-fieldlabel">備註</div>' +
+    '<input class="tm-input" id="mNote" type="text" maxlength="' + LIMITS.text + '" value="' + esc(manualState.note) + '">' +
+    '<div class="tm-sheetfoot">' +
+      '<button class="tm-btn" type="button" data-act="close">取消</button>' +
+      '<button class="tm-btn primary" type="button" data-act="m-ok">補登這一筆</button>' +
+    '</div>'
+  );
+}
+
+function commitManual() {
+  captureManual();
+  var item = findItem(manualState.itemUuid);
+  if (!item) { toast('先選品項'); return; }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(manualState.date)) { toast('日期格式不對'); return; }
+  if (!/^\d{1,2}:\d{2}/.test(manualState.time)) { toast('時間格式不對'); return; }
+
+  var mins = [];
+  for (var i = 0; i < MANUAL_SEGS.length; i++) {
+    var raw = manualState[MANUAL_SEGS[i].key];
+    var v = Number(raw);
+    if (raw === '' || isNaN(v) || v < 0) { toast('四段時長都要填。不知道的先問清楚再補登，不要填 0'); return; }
+    mins.push(v);
+  }
+
+  var qty = Number(manualState.qty);
+  if (manualState.qty === '' || isNaN(qty) || qty < 0 || qty > LIMITS.maxQty) {
+    toast('數量要在 0～' + LIMITS.maxQty + ' 之間'); return;
+  }
+
+  var start = new Date(manualState.date + 'T' + manualState.time.slice(0, 5) + ':00');
+  if (isNaN(start.getTime())) { toast('日期或時間讀不出來'); return; }
+
+  var t = start.getTime();
+  var stamps = [new Date(t)];
+  for (var j = 0; j < mins.length; j++) { t += mins[j] * 60000; stamps.push(new Date(t)); }
+
+  var rec = {
+    uuid: uuid(),
+    itemUuid: item.itemUuid,
+    itemName: item.name,
+    batchNote: trimText(manualState.batchNote) || '手動補登',
+    start: isoLocal(stamps[0]), ovenIn: isoLocal(stamps[1]), ovenOut: isoLocal(stamps[2]),
+    packStart: isoLocal(stamps[3]), packEnd: isoLocal(stamps[4]),
+    qty: Math.round(qty),
+    unit: item.unit || '',
+    note: trimText(manualState.note),
+    status: '正常',
+    rev: 0,
+    date: localDateKey(stamps[0])
+  };
+  enqueue('production', rec, item.name + '｜' + rec.batchNote);
+  manualState = null;
+  closeSheet();
+  render();
+  toast('已補登 ' + item.name + '，人力 ' + (mins[0] + mins[3]) + ' 分，待確認');
   sync(true);
 }
 
@@ -1371,13 +1551,22 @@ var ACTIONS = {
   'ship-start': function () { startShip(); },
   'ship-end': function () { endShip(); },
   'ship-undo': function () { undoShip(); },
-  'ship-ch': function (el) { shipState.channel = el.dataset.ch; renderShipSheet(); },
+  'ship-ch': function (el) { captureShipInputs(); shipState.channel = el.dataset.ch; renderShipSheet(); },
+  'ship-item': function (el) {
+    captureShipInputs();
+    var i = shipState.items.indexOf(el.dataset.id);
+    if (i >= 0) shipState.items.splice(i, 1); else shipState.items.push(el.dataset.id);
+    renderShipSheet();
+  },
   'ord+': function () { bumpField('ordVal', 1, LIMITS.maxOrderCount); },
   'ord-': function () { bumpField('ordVal', -1, LIMITS.maxOrderCount); },
   'box+': function () { bumpField('boxVal', 1, LIMITS.maxBoxCount); },
   'box-': function () { bumpField('boxVal', -1, LIMITS.maxBoxCount); },
   'ship-cancel': function () { shipState = null; closeSheet(); },
   'ship-ok': function () { commitShip(); },
+
+  'm-item': function (el) { captureManual(); manualState.itemUuid = el.dataset.id; renderManualSheet(); },
+  'm-ok': function () { commitManual(); },
 
   'unit': function (el) { itemDraft.unit = el.dataset.u; captureItemDraft(); renderItemsSheet(); },
   'item-add': function () { addItem(); },
@@ -1425,6 +1614,7 @@ document.getElementById('tabShip').addEventListener('click', function () { S.tab
 document.getElementById('syncBtn').addEventListener('click', function () { sync(false); });
 document.getElementById('pendingBtn').addEventListener('click', openQueue);
 document.getElementById('itemsBtn').addEventListener('click', openItems);
+document.getElementById('manualBtn').addEventListener('click', openManual);
 document.getElementById('settingsBtn').addEventListener('click', openSettings);
 modal.addEventListener('click', function (e) { if (e.target === modal) closeSheet(); });
 
@@ -1462,6 +1652,7 @@ window.__timer = {
   addItem: addItem, openItems: openItems, renameItem: renameItem,
   restoreItems: restoreItems, maybeAutoRestoreItems: maybeAutoRestoreItems,
   isLocalPreviewOnProd: isLocalPreviewOnProd,
+  openManual: openManual, commitManual: commitManual, manualState: function () { return manualState; },
   deleteItem: deleteItem, moveItem: moveItem, liveItems: liveItems,
   startShip: startShip, endShip: endShip, commitShip: commitShip,
   openQueue: openQueue, openEdit: openEdit, commitEdit: commitEdit, voidRecord: voidRecord,
