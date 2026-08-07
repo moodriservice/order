@@ -79,6 +79,13 @@ button:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
   margin:0 -12px 10px;padding:8px 14px;background:#fdf0e6;border-bottom:1px solid var(--line);
   font-size:12.5px;line-height:1.5;color:var(--brand-dark);
 }
+/* 本機預覽卻接著正式試算表時的警告。刻意做得比離線提示醒目——
+   離線只是等一下再送，這個是「現在按下去會真的寫進正式資料」。 */
+.tm-warn{
+  margin:0 -12px 10px;padding:10px 14px;background:#7a1f12;color:#fff;
+  font-size:12.5px;line-height:1.6;
+}
+.tm-warn strong{color:#ffd9cf}
 
 /* ---------- 頁籤 ---------- */
 .tm-tabs{display:flex;gap:8px;margin-bottom:12px}
@@ -249,6 +256,8 @@ button:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
     <button class="tm-sync" id="syncBtn" type="button">立即同步</button>
   </header>
 
+  <div class="tm-warn" id="previewWarn" hidden>⚠️ 這是<strong>本機預覽</strong>，但寫入端點指向<strong>正式試算表</strong>。現在按下去會真的存進去。要試功能請到「設定與還原」把網址改成測試用的。</div>
+
   <div class="tm-offline" id="offlineBar" hidden>目前沒有網路。按下的時間都存在手機裡，連上網路會自動補送。</div>
 
   <div class="tm-tabs">
@@ -379,6 +388,19 @@ function esc(s) {
 }
 function clamp(n, lo, hi) { return Math.min(hi, Math.max(lo, n)); }
 function trimText(s) { return String(s === null || s === undefined ? '' : s).trim().slice(0, LIMITS.text); }
+
+/**
+ * 跑在本機預覽、但端點卻指向正式試算表 —— 這是會出事的組合。
+ *
+ * 2026-08-07 就是這樣把三列煙霧測試資料寫進正式表的：
+ * 收尾清測試資料時把「指向假後端」的設定一起清掉，還原成正式端點，
+ * 然後才把 localhost 網址交出去。等於拆掉護欄才交鑰匙。
+ * 正式站（GitHub Pages）不會顯示這條，因為那本來就該連正式的。
+ */
+function isLocalPreviewOnProd() {
+  var local = /^(localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0)$/.test(location.hostname);
+  return local && /^https:\/\/script\.google\.com\//.test(S.endpoint);
+}
 
 var toastTimer = null;
 function toast(msg) {
@@ -1309,6 +1331,7 @@ function render() {
   sb.textContent = syncing ? '同步中…' : '立即同步';
   sb.disabled = syncing;
   document.getElementById('offlineBar').hidden = navigator.onLine;
+  document.getElementById('previewWarn').hidden = !isLocalPreviewOnProd();
 
   // 頁籤
   document.getElementById('tabProd').setAttribute('aria-pressed', String(S.tab === 'prod'));
@@ -1438,6 +1461,7 @@ window.__timer = {
   pendingRecords: pendingRecords, findQ: findQ, sync: sync, check: check,
   addItem: addItem, openItems: openItems, renameItem: renameItem,
   restoreItems: restoreItems, maybeAutoRestoreItems: maybeAutoRestoreItems,
+  isLocalPreviewOnProd: isLocalPreviewOnProd,
   deleteItem: deleteItem, moveItem: moveItem, liveItems: liveItems,
   startShip: startShip, endShip: endShip, commitShip: commitShip,
   openQueue: openQueue, openEdit: openEdit, commitEdit: commitEdit, voidRecord: voidRecord,
