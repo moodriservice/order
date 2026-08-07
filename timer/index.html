@@ -1163,11 +1163,18 @@ function saveEndpoint() {
   openSettings();
 }
 
-function restoreItems() {
-  if (!navigator.onLine) { toast('目前離線，還原需要連線'); return; }
-  toast('還原中…');
-  jsonp({ action: 'items' }).then(function (res) {
-    if (!res || !res.ok || !Array.isArray(res.items)) { toast('還原失敗：後端沒有回品項'); return; }
+function restoreItems(silent) {
+  if (!navigator.onLine) {
+    if (!silent) toast('目前離線，還原需要連線');
+    return Promise.resolve(0);
+  }
+  if (!silent) toast('還原中…');
+  return jsonp({ action: 'items' }).then(function (res) {
+    if (!res || !res.ok || !Array.isArray(res.items)) {
+      if (!silent) toast('還原失敗：後端沒有回品項');
+      return 0;
+    }
+    autoRestoreDone = true;
     var added = 0;
     res.items.forEach(function (r) {
       if (!r || !r.itemUuid) return;
@@ -1175,9 +1182,31 @@ function restoreItems() {
       S.items.push({ itemUuid: r.itemUuid, name: r.name, unit: r.unit || '', order: Number(r.order) || 0, deleted: false });
       added++;
     });
-    if (added > 0) { saveItems(); render(); }
-    toast(added > 0 ? '還原了 ' + added + ' 個品項' : '沒有需要還原的品項');
-  }).catch(function (e) { toast('還原失敗：' + (e && e.message ? e.message : '連線問題')); });
+    if (added > 0) { saveItems(); render(); toast('從試算表還原了 ' + added + ' 個品項'); }
+    else if (!silent) toast('沒有需要還原的品項');
+    return added;
+  }).catch(function (e) {
+    if (!silent) toast('還原失敗：' + (e && e.message ? e.message : '連線問題'));
+    return 0;
+  });
+}
+
+/**
+ * 本機品項清單是空的就自動從試算表還原一次，不必使用者自己去設定裡按。
+ *
+ * 為什麼會空：iOS 從主畫面圖示打開的 App，儲存空間跟 Safari 是**分開的兩份**。
+ * 在 Safari 裡建好品項、加到主畫面、再從圖示打開，看到的會是一份全新的空清單。
+ * 換手機、清瀏覽器資料也一樣。試算表那張備份就是為了這種時候存在的。
+ *
+ * 只在「本機一個品項都沒有」時才動作 —— 有東西就不碰，
+ * 免得變成沒說要做的跨裝置雙向合併，把手動刪掉的品項又復活。
+ */
+var autoRestoreDone = false;
+function maybeAutoRestoreItems() {
+  if (autoRestoreDone) return;
+  if (liveItems().length > 0) { autoRestoreDone = true; return; }
+  if (!navigator.onLine) return;   // 離線就先算了，連上網路時會再試一次
+  restoreItems(true);
 }
 
 function pingBackend() {
@@ -1261,7 +1290,9 @@ function render() {
   document.getElementById('cardsTitle').textContent = '進行中（' + S.cards.length + '）';
   document.getElementById('cardsEmpty').hidden = S.cards.length > 0;
   if (items.length === 0) {
-    document.getElementById('cardsEmpty').textContent = '還沒有品項。先按「＋ 新增品項」建立第一個。';
+    document.getElementById('cardsEmpty').textContent = navigator.onLine
+      ? '還沒有品項。先按「＋ 新增品項」建立第一個。'
+      : '這裡的品項清單是空的。連上網路會自動從試算表把品項抓回來，也可以直接按「＋ 新增品項」自己建。';
   } else {
     document.getElementById('cardsEmpty').textContent = '還沒有進行中的卡片。點上面的品項開一張。';
   }
@@ -1339,7 +1370,7 @@ var ACTIONS = {
   'q-sync': function () { sync(false).then(function () { if (!modal.hidden) renderQueueSheet(); }); },
 
   'set-save': function () { saveEndpoint(); },
-  'set-restore': function () { restoreItems(); },
+  'set-restore': function () { restoreItems(false); },
   'set-ping': function () { pingBackend(); },
 
   'close': function () { closeSheet(); }
@@ -1374,16 +1405,17 @@ document.getElementById('itemsBtn').addEventListener('click', openItems);
 document.getElementById('settingsBtn').addEventListener('click', openSettings);
 modal.addEventListener('click', function (e) { if (e.target === modal) closeSheet(); });
 
-window.addEventListener('online', function () { render(); sync(true); });
+window.addEventListener('online', function () { render(); sync(true); maybeAutoRestoreItems(); });
 window.addEventListener('offline', render);
 document.addEventListener('visibilitychange', function () {
-  if (!document.hidden) { render(); sync(true); }
+  if (!document.hidden) { render(); sync(true); maybeAutoRestoreItems(); }
 });
 
 /* ---- 啟動 ---------------------------------------------------------- */
 
 pruneQueue();
 render();
+maybeAutoRestoreItems();
 tick();
 setInterval(tick, 15000);
 setInterval(function () { if (pendingRecords().length > 0 || S.queue.length > 0) sync(true); }, 120000);
@@ -1405,6 +1437,7 @@ window.__timer = {
   buildProduction: buildProduction, isoLocal: isoLocal, uuid: uuid,
   pendingRecords: pendingRecords, findQ: findQ, sync: sync, check: check,
   addItem: addItem, openItems: openItems, renameItem: renameItem,
+  restoreItems: restoreItems, maybeAutoRestoreItems: maybeAutoRestoreItems,
   deleteItem: deleteItem, moveItem: moveItem, liveItems: liveItems,
   startShip: startShip, endShip: endShip, commitShip: commitShip,
   openQueue: openQueue, openEdit: openEdit, commitEdit: commitEdit, voidRecord: voidRecord,
