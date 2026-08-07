@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# 金鑰防護：commit 前掃描 staged 內容，攔在 gitleaks Action（push 後才跑）之前
+if ! command -v gitleaks >/dev/null 2>&1; then
+  echo "⚠️ gitleaks 未安裝，略過本地金鑰掃描（建議：winget install gitleaks）"
+  exit 0
+fi
+gitleaks protect --staged --redact -v
