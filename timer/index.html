@@ -100,6 +100,31 @@ button:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
 .tm-sectitle{font-size:13px;font-weight:700;color:var(--muted);margin:14px 2px 8px;letter-spacing:.4px}
 .tm-empty{margin:8px 2px;font-size:13px;line-height:1.7;color:var(--muted)}
 
+/* ---------- 今日小結：像廚房工作檯上的一張小記錄卡 ---------- */
+.tm-daily{
+  margin:0 0 12px;padding:12px 14px;border:1px solid var(--line);border-radius:16px;
+  background:rgba(255,255,255,.82);box-shadow:0 2px 8px rgba(0,0,0,.035);
+}
+.tm-dailyhead{display:flex;align-items:baseline;justify-content:space-between;gap:10px}
+.tm-daily h2{margin:0;font-size:15px;font-weight:800}
+.tm-daily .tm-dailycount{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
+.tm-daily .tm-dailytime{margin:7px 0 0;font-size:14px;font-weight:700;font-variant-numeric:tabular-nums}
+.tm-daily .tm-dailyitems{margin:5px 0 0;font-size:12.5px;line-height:1.6;color:var(--muted)}
+.tm-daily .tm-dailynote{margin:6px 0 0;font-size:11.5px;line-height:1.5;color:var(--muted)}
+
+/* 跨日／待填數量不是錯誤，只要在開頁時讓人看見、自己確認即可。 */
+.tm-carry{
+  margin:0 0 12px;padding:11px 14px;border-left:4px solid var(--brand);border-radius:0 14px 14px 0;
+  background:#fff0ea;color:var(--ink);
+}
+.tm-carry h2{margin:0;font-size:14px;font-weight:800}
+.tm-carry p{margin:4px 0 0;font-size:12.5px;line-height:1.55;color:#754234}
+.tm-carrylist{display:grid;gap:6px;margin-top:9px}
+.tm-carryrow{display:grid;grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"name action" "meta action";gap:2px 8px;align-items:center;font-size:13px;line-height:1.4}
+.tm-carryrow .name{grid-area:name;font-weight:700;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tm-carryrow .meta{grid-area:meta;color:#754234;font-variant-numeric:tabular-nums}
+.tm-carryrow button{grid-area:action;min-height:36px;padding:7px 10px;border:1px solid rgba(184,64,31,.3);border-radius:10px;background:#fff;color:var(--brand-dark);font-size:12px;font-weight:700}
+
 /* ---------- 品項列 ---------- */
 .tm-items{display:flex;gap:8px;overflow-x:auto;padding-bottom:6px;scrollbar-width:none;-webkit-overflow-scrolling:touch}
 .tm-items::-webkit-scrollbar{display:none}
@@ -284,6 +309,9 @@ button:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
     <button id="tabProd" type="button" aria-pressed="true">生產</button>
     <button id="tabShip" type="button" aria-pressed="false">出貨</button>
   </div>
+
+  <section class="tm-daily" id="dailySummary" aria-live="polite"></section>
+  <section class="tm-carry" id="unfinishedAlert" aria-live="polite" hidden></section>
 
   <main id="viewProd">
     <div class="tm-sectitle">點一下品項，開一張新的計時卡</div>
@@ -1580,6 +1608,105 @@ function coolMin(d) {
   return Math.round(((new Date(d.packStart) - new Date(d.ovenOut)) / 60000) * 10) / 10;
 }
 
+/* ---- 今日小結與未結束提醒 ------------------------------------------ */
+
+/**
+ * 小結是這支手機的本機視窗，不是從試算表回查的完整日報。
+ * 這樣剛完成、尚待查核的紀錄也會立即出現；真正的跨裝置總表仍在試算表。
+ */
+function recordCompletedAt(q) {
+  if (!q || !q.data) return null;
+  return q.type === 'production' ? q.data.packEnd : (q.type === 'shipping' ? q.data.end : null);
+}
+function isVoidedRecord(q) { return !!(q && q.data && q.data.status === '已作廢'); }
+function todayRecords() {
+  var today = localDateKey(new Date());
+  return S.queue.filter(function (q) {
+    var finishedAt = recordCompletedAt(q);
+    return (q.type === 'production' || q.type === 'shipping') && !isVoidedRecord(q) &&
+      finishedAt && localDateKey(new Date(finishedAt)) === today;
+  });
+}
+function fmtSummaryMin(n) {
+  var v = Math.round((Number(n) || 0) * 10) / 10;
+  return (v % 1 === 0 ? String(v.toFixed(0)) : String(v)) + ' 分';
+}
+function cardAttentionLabel(c) {
+  if (c.stage >= TIME_KEYS.length) return '已包裝完，待填數量';
+  if (isPaused(c)) return '昨天開始，目前已暫停';
+  return '昨天開始，現在在' + STAGE_STATUS[Math.min(c.stage, STAGE_STATUS.length - 1)];
+}
+function attentionCards() {
+  var today = localDateKey(new Date());
+  return S.cards.filter(function (c) {
+    return c.stage >= TIME_KEYS.length ||
+      (c.times.start && localDateKey(new Date(c.times.start)) !== today);
+  }).sort(function (a, b) {
+    var aDone = a.stage >= TIME_KEYS.length ? 0 : 1;
+    var bDone = b.stage >= TIME_KEYS.length ? 0 : 1;
+    return aDone - bDone;
+  });
+}
+function renderDailyOverview() {
+  var records = todayRecords();
+  var prod = records.filter(function (q) { return q.type === 'production'; });
+  var ship = records.filter(function (q) { return q.type === 'shipping'; });
+  var labor = prod.reduce(function (sum, q) { return sum + laborMin(q.data); }, 0);
+  var oven = prod.reduce(function (sum, q) {
+    return sum + Math.max(0, (new Date(q.data.ovenOut) - new Date(q.data.ovenIn)) / 60000);
+  }, 0);
+  var shipMin = ship.reduce(function (sum, q) {
+    return sum + Math.max(0, (new Date(q.data.end) - new Date(q.data.start)) / 60000);
+  }, 0);
+  var itemTotals = {};
+  prod.forEach(function (q) {
+    var d = q.data;
+    var key = String(d.itemName || '未命名品項') + '|' + String(d.unit || '份');
+    if (!itemTotals[key]) itemTotals[key] = { name: d.itemName || '未命名品項', unit: d.unit || '份', qty: 0 };
+    itemTotals[key].qty += Number(d.qty) || 0;
+  });
+  var items = Object.keys(itemTotals).map(function (key) {
+    var it = itemTotals[key];
+    return esc(it.name) + ' ' + esc(it.qty) + esc(it.unit);
+  });
+  var waiting = records.filter(function (q) { return q.state === 'pending'; }).length;
+  var stuck = records.filter(function (q) { return q.state === 'stuck'; }).length;
+  var summary = document.getElementById('dailySummary');
+  summary.dataset.date = localDateKey(new Date());
+  summary.innerHTML =
+    '<div class="tm-dailyhead"><h2>今天已記</h2><span class="tm-dailycount">生產 ' + prod.length + ' 筆・出貨 ' + ship.length + ' 趟</span></div>' +
+    (records.length
+      ? '<p class="tm-dailytime">人力 ' + fmtSummaryMin(labor) + '・烤箱 ' + fmtSummaryMin(oven) + '・出貨 ' + fmtSummaryMin(shipMin) + '</p>' +
+        (items.length ? '<p class="tm-dailyitems">' + items.join('、') + '</p>' : '') +
+        '<p class="tm-dailynote">這支手機今天已記' +
+          (waiting ? '，含 ' + waiting + ' 筆待確認' : '') +
+          (stuck ? (waiting ? '；' : '，') + '另有 ' + stuck + ' 筆送不出去' : '') +
+          (!waiting && !stuck ? '，目前都已同步' : '') + '</p>'
+      : '<p class="tm-dailynote">今天還沒有完成紀錄。完成後會自動顯示在這裡。</p>');
+
+  var cards = attentionCards();
+  var alert = document.getElementById('unfinishedAlert');
+  alert.hidden = cards.length === 0;
+  if (!cards.length) { alert.innerHTML = ''; return; }
+  alert.innerHTML =
+    '<h2>有 ' + cards.length + ' 張卡還沒收尾</h2>' +
+    '<p>不會自動改時間；先確認是不是還在進行，或是忘了填數量。</p>' +
+    '<div class="tm-carrylist">' + cards.map(function (c) {
+      var elapsed = c.times.start ? fmtSpan(Date.now() - new Date(c.times.start).getTime()) : '尚未開始';
+      return '<div class="tm-carryrow"><span class="name">' + esc(c.itemName) +
+        (c.batchNote ? ' ' + esc(c.batchNote) : '') + '</span><span class="meta">' + esc(cardAttentionLabel(c)) + '・<span data-attention-elapsed="' + esc(c.id) + '">' + esc(elapsed) +
+        '</span><button type="button" data-act="focus-card" data-id="' + esc(c.id) + '">查看</button></div>';
+    }).join('') + '</div>';
+}
+function focusCard(id) {
+  S.tab = 'prod';
+  render();
+  window.setTimeout(function () {
+    var card = document.querySelector('.tm-card[data-id="' + id + '"]');
+    if (card) card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, 0);
+}
+
 function renderQueueSheet() {
   var recs = S.queue.filter(function (q) { return q.type !== 'items'; })
     .sort(function (a, b) { return String(b.createdAt).localeCompare(String(a.createdAt)); });
@@ -1977,6 +2104,7 @@ function render() {
   sb.disabled = syncing;
   document.getElementById('offlineBar').hidden = navigator.onLine;
   document.getElementById('previewWarn').hidden = !isLocalPreviewOnProd();
+  renderDailyOverview();
 
   // 頁籤
   document.getElementById('tabProd').setAttribute('aria-pressed', String(S.tab === 'prod'));
@@ -1994,11 +2122,17 @@ function tick() {
     if (!c.times.start) return;
     var el = document.querySelector('[data-elapsed="' + c.id + '"]');
     if (el) el.textContent = fmtSpan(Date.now() - new Date(c.times.start).getTime());
+    var attention = document.querySelector('[data-attention-elapsed="' + c.id + '"]');
+    if (attention) attention.textContent = fmtSpan(Date.now() - new Date(c.times.start).getTime());
   });
   if (S.ship) {
     var se = document.querySelector('[data-elapsed="ship"]');
     if (se) se.textContent = fmtSpan(Date.now() - new Date(S.ship.start).getTime());
   }
+  // 跨午夜時，今日小結必須改成新的一天；不整頁重畫，不干擾正在按的卡片。
+  var summaryDate = document.getElementById('dailySummary').dataset.date || '';
+  var today = localDateKey(new Date());
+  if (summaryDate !== today) renderDailyOverview();
 }
 
 /* ---- 事件 ---------------------------------------------------------- */
@@ -2009,6 +2143,7 @@ var ACTIONS = {
   'advance': function (el) { advance(el.dataset.id); },
   'undo': function (el) { undo(el.dataset.id); },
   'pause': function (el) { pauseCard(el.dataset.id); },
+  'focus-card': function (el) { focusCard(el.dataset.id); },
 
   'qty+': function () { bumpQty(1); },
   'qty-': function () { bumpQty(-1); },
@@ -2144,9 +2279,10 @@ window.__timer = {
   openManual: openManual, commitManual: commitManual, manualState: function () { return manualState; },
   deleteItem: deleteItem, moveItem: moveItem, liveItems: liveItems,
   startShip: startShip, endShip: endShip, commitShip: commitShip,
-  openQueue: openQueue, openEdit: openEdit, commitEdit: commitEdit, voidRecord: voidRecord,
-  setEndpoint: function (u) { S.endpoint = u; }
-};
+   openQueue: openQueue, openEdit: openEdit, commitEdit: commitEdit, voidRecord: voidRecord,
+   todayRecords: todayRecords, attentionCards: attentionCards, renderDailyOverview: renderDailyOverview,
+   setEndpoint: function (u) { S.endpoint = u; }
+ };
 
 })();
 </script>
