@@ -1,0 +1,19 @@
+# gitleaks 例外設定
+#
+# 為什麼需要這個檔：Cloudflare Web Analytics 的 beacon token 是「公開」的識別碼，
+# 它的用途就是讓每個訪客的瀏覽器下載、告訴 Cloudflare 這筆流量算在哪個網站頭上，
+# 本來就會出現在網頁原始碼裡。但它長得像一串 32 位英數字，gitleaks 會把它誤判成
+# API 金鑰而擋下 commit。
+#
+# 例外開得很窄：只放行出現在 data-cf-beacon 屬性裡的 token，
+# 其他任何地方出現的可疑字串照樣會被擋。
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Cloudflare Web Analytics 的公開 beacon token（非機密，設計上就會出現在前端原始碼）"
+regexTarget = "line"
+regexes = [
+  '''data-cf-beacon='\{"token": "[a-f0-9]{32}"\}'''
+]
