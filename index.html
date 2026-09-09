@@ -240,9 +240,11 @@
     loadingBox.style.display = "block";
 
     // 自動跳轉
+    // 2026-09-09：從 500ms 調到 1000ms。實測 Cloudflare 統計的回報請求要 447～518ms
+    // 才完成，原本的 500ms 等於踩線，手機或網路慢一點就來不及回報、瀏覽數會少算。
     setTimeout(() => {
       window.location.href = targetURL;
-    }, 500);
+    }, 1000);
 
     // Fallback 訊息
     setTimeout(() => {
