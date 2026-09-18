@@ -203,9 +203,14 @@
   const isIG = ua.includes("instagram");
   const isFB = ua.includes("fb_iab") || ua.includes("fbav");
   const isLine = ua.includes("line/");
-  const isThreads = ua.includes("barcelona");
-  // 社群內建瀏覽器（IG/FB/LINE/Threads）常擋 Google/GAS，統一走「顯示教學、不自動跳轉」
-  const isInApp = isIG || isFB || isLine || isThreads;
+  const isAndroid = ua.includes("android");
+  const isIOS = /iphone|ipad|ipod/.test(ua);
+  // 社群內建瀏覽器 → 顯示教學 + 嘗試跳外部瀏覽器。
+  // 2026-09-18：Threads（UA 含 "barcelona"）刻意移出這一列。原本跟 IG/FB/LINE 綁在一起，
+  // 但那是一次設定、從沒單獨驗證過；實測短網址服務對 Threads 是直接轉址不擋，
+  // 代表 Threads 內建瀏覽器開得了 GAS，多一道教學頁只是讓客人白按一次。
+  // 要回退：把 || ua.includes("barcelona") 加回下面這行即可。
+  const isInApp = isIG || isFB || isLine;
 
   const targetURL = "https://script.google.com/macros/s/AKfycbzXqyTeQ2m5qzYRGqd0HBgQUYaPbORnri2p6Y2jCBOp8yImyAKbYh6BnmU2PqtGsdu3zQ/exec";
 
@@ -219,6 +224,25 @@
   manualLink.href = targetURL;
   loadingLink.href = targetURL;
 
+  // 「跳去外部瀏覽器」用的網址，一律由 targetURL 現場組出來，不另外寫死一份。
+  // 寫死的話下次換部署版本一定會漏改，而且不會報錯——客人會被安靜地丟到舊訂購頁。
+  const encodedTarget = encodeURIComponent(targetURL);
+  // Android：不指定 Chrome（沒裝 Chrome 也不會壞），跳不出去就用 fallback 留在原地開
+  const androidIntentURL =
+    "intent://" + targetURL.replace("https://", "") +
+    "#Intent;scheme=https;S.browser_fallback_url=" + encodedTarget + ";end";
+  // iOS：只有 IG 有自家的外部瀏覽器指令。FB／LINE 在 iOS 沒有可靠做法
+  //（常見的 x-safari-https:// 在現代 iOS 多半已失效），所以留空、維持純教學。
+  const iosExternalURL = isIG ? "instagram://extbrowser/?url=" + encodedTarget : "";
+
+  // 回傳 true 代表「有試著跳出去」，false 代表這個組合沒招、交給原本的教學流程
+  function tryExternalBrowser() {
+    const jumpURL = isAndroid ? androidIntentURL : (isIOS ? iosExternalURL : "");
+    if (!jumpURL) return false;
+    window.location.href = jumpURL;
+    return true;
+  }
+
   // 防右鍵存圖、防拖曳存圖（僅心理防線，開發者工具或抓封包還是看得到圖片網址）
   document.addEventListener('contextmenu', function(e) {
     if (e.target.tagName === 'IMG') e.preventDefault();
@@ -227,11 +251,22 @@
     if (e.target.tagName === 'IMG') e.preventDefault();
   });
 
-  // 社群內建瀏覽器 → 顯示教學 + 手動按鈕，不自動跳轉
+  // 社群內建瀏覽器 → 顯示教學 + 手動按鈕，另外自動試一次跳外部瀏覽器
   if (isInApp) {
     introText.style.display = "block";
     igGuide.style.display = "block";
     manualLink.style.display = "block";
+
+    // 自動試跳。⚠️ 這是「有機會成功」不是「一定成功」：Android 規定沒有使用者點擊
+    // 就不准喚起外部 App，所以這一步很可能被系統擋掉。擋掉就等於維持原本的行為
+    // （停在這頁看教學），所以上面的教學文字絕對不能拿掉。
+    setTimeout(tryExternalBrowser, 300);
+
+    // 按鈕：先試跳外部瀏覽器（使用者真的點了，成功率比自動試高）；
+    // 沒招可用時不攔截，讓 <a> 照原本的方式在內建瀏覽器開訂購頁。
+    manualLink.addEventListener("click", function (e) {
+      if (tryExternalBrowser()) e.preventDefault();
+    });
   }
   // 外部瀏覽器 → 自動跳轉 + loading
   else {
