@@ -303,6 +303,8 @@ button:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
 
   <div class="tm-warn" id="previewWarn" hidden>⚠️ 這是<strong>本機預覽</strong>，但寫入端點指向<strong>正式試算表</strong>。現在按下去會真的存進去。要試功能請到「設定與還原」把網址改成測試用的。</div>
 
+  <div class="tm-warn" id="passWarn" hidden>🔒 這支手機<strong>還沒有可用的通行碼</strong>，按下的時間先存在手機裡、不會送出。到「設定與還原」輸入通行碼，驗證通過就會自動補送。</div>
+
   <div class="tm-offline" id="offlineBar" hidden>目前沒有網路。按下的時間都存在手機裡，連上網路會自動補送。</div>
 
   <div class="tm-tabs">
@@ -382,6 +384,7 @@ var K = {
   ship: 'moodri.timer.ship.v1',
   queue: 'moodri.timer.queue.v1',
   endpoint: 'moodri.timer.endpoint.v1',
+  passcode: 'moodri.timer.passcode.v1',
   lastQty: 'moodri.timer.lastqty.v1',
   lastTrays: 'moodri.timer.lasttrays.v1'
 };
@@ -602,7 +605,88 @@ function post(type, records) {
     method: 'POST',
     mode: 'no-cors',
     headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body: JSON.stringify({ type: type, records: records })
+    body: JSON.stringify({ type: type, records: records, passcode: storedPasscode().code })
+  });
+}
+
+/* ---- 裝置通行碼 ----------------------------------------------------- */
+
+/**
+ * 後端只收帶正確通行碼的寫入。送出走 no-cors 讀不到回應，通行碼錯了前端不會知道；
+ * 品項／通路備份又是「送出就從佇列移掉」，錯的期間會無聲遺失。
+ * 所以每次有東西要送之前，先用 JSONP 問一次「這組通行碼對不對」，不對就整批不送、留在手機。
+ * 網址只帶雜湊值（倒推不回原文），原文只放在 POST 內容裡。
+ */
+var PASS_MIN_LENGTH = 8;
+
+function storedPasscode() {
+  var p = load(K.passcode, null);
+  return (p && typeof p.code === 'string' && typeof p.hash === 'string') ? p : { code: '', hash: '', ok: false };
+}
+
+function passcodeUsable() {
+  var p = storedPasscode();
+  return p.code !== '' && p.ok === true;
+}
+
+function sha256Hex(text) {
+  if (!(window.crypto && crypto.subtle && window.TextEncoder)) {
+    return Promise.reject(new Error('這個瀏覽器不支援通行碼驗證，請改用 Chrome 或 Safari'));
+  }
+  return crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)).then(function (buf) {
+    var bytes = new Uint8Array(buf);
+    var hex = '';
+    for (var i = 0; i < bytes.length; i++) hex += (bytes[i] + 0x100).toString(16).slice(1);
+    return hex;
+  });
+}
+
+/** 問後端這組雜湊對不對。回傳 true／false；連不上就丟錯（呼叫端不可當成「不對」） */
+function askPasscode(hash) {
+  return jsonp({ action: 'auth', h: hash }).then(function (res) {
+    // 後端暫時出錯（ok=false）不等於通行碼錯，當成連不上處理
+    if (!res || res.ok !== true) throw new Error('後端暫時沒有回應');
+    return res.valid === true;
+  });
+}
+
+/** 送出前的把關。通過才 resolve；不通過或連不上都 reject，佇列原封不動 */
+function ensurePasscode() {
+  var p = storedPasscode();
+  if (!p.code) return Promise.reject(new Error('還沒設定通行碼，資料先留在手機裡'));
+  return askPasscode(p.hash).then(function (valid) {
+    // 等回應的期間使用者可能已經存了新通行碼：只有存著的還是同一組才更新，避免蓋掉新的
+    var now = storedPasscode();
+    if (now.hash === p.hash && now.ok !== valid) { now.ok = valid; save(K.passcode, now); }
+    if (!valid) throw new Error('通行碼不正確或已更換，資料先留在手機裡。到「設定與還原」重新輸入');
+  });
+}
+
+function savePasscode() {
+  var el = document.getElementById('setPasscode');
+  var code = String((el && el.value) || '').trim();
+  if (code.length < PASS_MIN_LENGTH) {
+    toast('通行碼至少 ' + PASS_MIN_LENGTH + ' 個字');
+    return Promise.resolve(false);
+  }
+  if (!navigator.onLine) {
+    toast('目前離線，連上網路才能驗證通行碼');
+    return Promise.resolve(false);
+  }
+  toast('驗證中…');
+  return sha256Hex(code).then(function (hash) {
+    return askPasscode(hash).then(function (valid) {
+      if (!valid) { toast('通行碼不正確，沒有儲存'); return false; }
+      save(K.passcode, { code: code, hash: hash, ok: true });
+      toast('通行碼正確，開始補送');
+      openSettings();
+      render();
+      sync(true);
+      return true;
+    });
+  }).catch(function (err) {
+    toast('沒辦法驗證：' + (err && err.message ? err.message : '連線失敗') + '，通行碼沒有儲存');
+    return false;
   });
 }
 
@@ -673,6 +757,9 @@ function sync(silent) {
   var sentOk = 0;
   var failed = 0;
 
+  // 有東西要送才檢查通行碼；只剩查核（唯讀）時不用。檢查失敗會直接跳到最後的 catch，什麼都不送
+  var gate = outbox.length > 0 ? ensurePasscode() : Promise.resolve();
+
   var chain = jobs.reduce(function (p, job) {
     return p.then(function () {
       return post(job.type, job.group.map(function (q) { return q.data; })).then(function () {
@@ -687,7 +774,7 @@ function sync(silent) {
         });
       }).catch(function () { failed += job.group.length; });
     });
-  }, Promise.resolve());
+  }, gate);
 
   return chain.then(function () {
     S.queue = S.queue.filter(function (q) { return q.state !== 'sent'; });
@@ -1859,6 +1946,11 @@ function openSettings() {
   sheetHtml(
     '<h2>設定與還原</h2>' +
     '<p class="hint">品項清單以這支手機為主，試算表那張「品項清單備份」是單向備份。換手機或清掉瀏覽器資料時才用得到還原。</p>' +
+    '<div class="tm-fieldlabel">通行碼（' + (passcodeUsable() ? '已驗證 ✓' : (storedPasscode().code ? '需要重新輸入' : '尚未設定')) + '）</div>' +
+    '<input class="tm-input" id="setPasscode" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="至少 8 個字，向管理者索取">' +
+    '<div class="tm-sheetfoot">' +
+      '<button class="tm-btn primary" type="button" data-act="set-pass">驗證並儲存通行碼</button>' +
+    '</div>' +
     '<div class="tm-fieldlabel">Web App 網址（備用，留空就用內建的）</div>' +
     '<input class="tm-input" id="setEndpoint" type="url" inputmode="url" placeholder="https://script.google.com/macros/s/…/exec" value="' + esc(load(K.endpoint, '')) + '">' +
     '<div class="tm-sheetfoot">' +
@@ -2105,6 +2197,7 @@ function render() {
   sb.disabled = syncing;
   document.getElementById('offlineBar').hidden = navigator.onLine;
   document.getElementById('previewWarn').hidden = !isLocalPreviewOnProd();
+  document.getElementById('passWarn').hidden = passcodeUsable();
   renderDailyOverview();
 
   // 頁籤
@@ -2201,6 +2294,7 @@ var ACTIONS = {
   'set-restore-ch': function () { restoreChannels(false); },
   'set-channels': function () { openChannels(); },
   'set-ping': function () { pingBackend(); },
+  'set-pass': function () { savePasscode(); },
 
   'close': function () { closeSheet(); }
 };
@@ -2282,7 +2376,8 @@ window.__timer = {
   startShip: startShip, endShip: endShip, commitShip: commitShip,
    openQueue: openQueue, openEdit: openEdit, commitEdit: commitEdit, voidRecord: voidRecord,
    todayRecords: todayRecords, attentionCards: attentionCards, renderDailyOverview: renderDailyOverview,
-   setEndpoint: function (u) { S.endpoint = u; }
+   setEndpoint: function (u) { S.endpoint = u; },
+   savePasscode: savePasscode, ensurePasscode: ensurePasscode, passcodeUsable: passcodeUsable
  };
 
 })();

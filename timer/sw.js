@@ -8,7 +8,7 @@
  */
 'use strict';
 
-var CACHE = 'moodri-timer-v8';
+var CACHE = 'moodri-timer-v9';
 
 // 這幾個檔缺一個就開不起來，所以在安裝時一次抓齊
 var SHELL = [
